@@ -30,3 +30,4 @@ assets/extracted/ # If you use any asset processors
 # Notes for project organisation
 *.md
 **/notes
+**/tasks
