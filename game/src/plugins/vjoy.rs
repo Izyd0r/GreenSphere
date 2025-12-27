@@ -28,11 +28,23 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<VjoyConfig>()
         .init_resource::<VjoyOutput>()
         .init_resource::<ActiveTouch>()
+        .register_type::<VjoyConfig>()
+        .register_type::<VjoyOutput>() 
         .add_systems(Startup, spawn_joystick)
         .add_systems(Update, (
             joystick_input_system, 
             joystick_render_system 
         ).chain());
+
+    #[cfg(feature = "dev")]
+    {
+        use bevy_egui::EguiPlugin;
+        use bevy_inspector_egui::quick::ResourceInspectorPlugin;
+        
+        app.add_plugins(EguiPlugin::default());
+        app.add_plugins(ResourceInspectorPlugin::<VjoyConfig>::default());
+        app.add_plugins(ResourceInspectorPlugin::<VjoyOutput>::default());
+    }
 }
 
 /// Spawns the visual hierarchy of the joystick.
@@ -56,7 +68,6 @@ fn spawn_joystick(mut commands: Commands, config: Res<VjoyConfig>) {
             justify_content: JustifyContent::Center,
             ..default()
         },
-        // Use the color from config
         BackgroundColor(config.base_color.with_alpha(config.alpha_idle)),
         BorderRadius::all(Val::Percent(50.0)),
         ZIndex(100),
@@ -151,11 +162,19 @@ fn joystick_render_system(
     if let Ok(mut base_node) = q_base_node.single_mut() {
         base_node.width = Val::VMin(config.base_size_vmin);
         base_node.height = Val::VMin(config.base_size_vmin);
+        base_node.max_width = Val::Px(config.base_max_px);
+        base_node.max_height = Val::Px(config.base_max_px);
+        base_node.min_width = Val::Px(config.base_min_px);
+        base_node.min_height = Val::Px(config.base_min_px);
         base_node.left = Val::VMin(config.pos_left_vmin);
         base_node.bottom = Val::VMin(config.pos_bottom_vmin);
     }
     knob_node.width = Val::VMin(config.knob_size_vmin);
     knob_node.height = Val::VMin(config.knob_size_vmin);
+    knob_node.max_width = Val::Px(config.knob_max_px);
+    knob_node.max_height = Val::Px(config.knob_max_px);
+    knob_node.min_width = Val::Px(config.knob_min_px);
+    knob_node.min_height = Val::Px(config.knob_min_px);
 
     let base_radius = base_computed.size().x / 2.0;
     let knob_radius = knob_computed.size().x / 2.0;

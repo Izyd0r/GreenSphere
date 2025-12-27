@@ -50,9 +50,11 @@ pub struct VjoyConfig {
     pub knob_min_px: f32,
 
     /// The base color (tint) of the joystick background circle.
+    #[reflect(ignore)]
     pub base_color: Color,
 
     /// The color of the inner moving knob.
+    #[reflect(ignore)]
     pub knob_color: Color,
 }
 
