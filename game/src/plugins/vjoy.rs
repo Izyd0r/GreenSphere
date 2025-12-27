@@ -17,13 +17,15 @@ use crate::prelude::{
     active_touch::ActiveTouch, 
     vjoy_base::VjoyBase, 
     vjoy_knob::VjoyKnob, 
-    vjoy_output::VjoyOutput
+    vjoy_output::VjoyOutput,
+    vjoy_config::VjoyConfig
 };
 
 /// Main entry point for the Virtual Joystick functionality.
 /// Call `.add_plugins(vjoy::plugin)` in your App setup.
 pub(crate) fn plugin(app: &mut App) {
     app
+        .init_resource::<VjoyConfig>()
         .init_resource::<VjoyOutput>()
         .init_resource::<ActiveTouch>()
         .add_systems(Startup, spawn_joystick)
@@ -35,29 +37,27 @@ pub(crate) fn plugin(app: &mut App) {
 
 /// Spawns the visual hierarchy of the joystick.
 /// The Base is positioned using `VMin` to stay responsive across screen sizes.
-fn spawn_joystick(mut commands: Commands) {
-    let base_size = Val::VMin(30.0); 
-    let knob_size = Val::VMin(10.0);
-
+fn spawn_joystick(mut commands: Commands, config: Res<VjoyConfig>) {
     commands.spawn((
-        VjoyBase { radius: 0.0 },
-        Interaction::default(), 
+        VjoyBase::default(),
+        Interaction::default(),
         Node {
-            width: base_size,
-            height: base_size,
-            max_width: Val::Px(250.0),
-            max_height: Val::Px(250.0),
-            min_width: Val::Px(120.0),
-            min_height: Val::Px(120.0),
+            width: Val::VMin(config.base_size_vmin),
+            height: Val::VMin(config.base_size_vmin),
+            max_width: Val::Px(config.base_max_px),
+            max_height: Val::Px(config.base_max_px),
+            min_width: Val::Px(config.base_min_px),
+            min_height: Val::Px(config.base_min_px),
             position_type: PositionType::Absolute,
-            left: Val::VMin(20.0),
-            bottom: Val::VMin(15.0),
-            flex_direction: FlexDirection::Column,
+            left: Val::VMin(config.pos_left_vmin),
+            bottom: Val::VMin(config.pos_bottom_vmin),
+            display: Display::Flex,
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
             ..default()
         },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.3)),
+        // Use the color from config
+        BackgroundColor(config.base_color.with_alpha(config.alpha_idle)),
         BorderRadius::all(Val::Percent(50.0)),
         ZIndex(100),
     ))
@@ -66,16 +66,16 @@ fn spawn_joystick(mut commands: Commands) {
         parent.spawn((
             VjoyKnob,
             Node {
-                width: knob_size,
-                height: knob_size,
-                max_width: Val::Px(80.0),
-                max_height: Val::Px(80.0),
-                min_width: Val::Px(40.0),
-                min_height: Val::Px(40.0),
+                width: Val::VMin(config.knob_size_vmin),
+                height: Val::VMin(config.knob_size_vmin),
+                max_width: Val::Px(config.knob_max_px),
+                max_height: Val::Px(config.knob_max_px),
+                min_width: Val::Px(config.knob_min_px),
+                min_height: Val::Px(config.knob_min_px),
                 position_type: PositionType::Relative, 
                 ..default()
             },
-            BackgroundColor(Color::WHITE),
+            BackgroundColor(config.knob_color.with_alpha(config.alpha_idle)),
             BorderRadius::all(Val::Percent(50.0)),
         ));
     });
@@ -90,6 +90,7 @@ fn spawn_joystick(mut commands: Commands) {
 fn joystick_input_system(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     touches: Res<Touches>,
+    config: Res<VjoyConfig>,
     mut q_base: Query<(&Interaction, &RelativeCursorPosition, &mut VjoyBase, &ComputedNode)>,
     mut vjoy_output: ResMut<VjoyOutput>,
     mut active_touch: ResMut<ActiveTouch>,
@@ -120,10 +121,9 @@ fn joystick_input_system(
 
         if !input_released {
             if let Some(pos) = relative_cursor.normalized {
-                let sensitivity = 2.0;
-                let joystick_vec = Vec2::new(pos.x * sensitivity, -pos.y * sensitivity);
+                let joystick_vec = Vec2::new(pos.x * config.sensitivity, -pos.y * config.sensitivity);
                 vjoy_output.dir = joystick_vec.clamp(Vec2::splat(-1.0), Vec2::splat(1.0));
-                if vjoy_output.dir.length() < 0.05 { vjoy_output.dir = Vec2::ZERO; }
+                if vjoy_output.dir.length() < config.deadzone { vjoy_output.dir = Vec2::ZERO; }
             }
         }
     }
@@ -138,20 +138,38 @@ fn joystick_input_system(
 fn joystick_render_system(
     vjoy_output: Res<VjoyOutput>,
     active_touch: Res<ActiveTouch>,
-    q_base: Query<&ComputedNode, (With<VjoyBase>, Without<VjoyKnob>)>,
-    mut q_knob: Query<&mut Node, With<VjoyKnob>>,
+    config: Res<VjoyConfig>,
+    q_base: Query<(&ComputedNode, Entity), (With<VjoyBase>, Without<VjoyKnob>)>,
+    mut q_base_node: Query<&mut Node, (With<VjoyBase>, Without<VjoyKnob>)>,
+    mut q_knob: Query<(&mut Node, &ComputedNode), With<VjoyKnob>>,
     mut q_base_col: Query<&mut BackgroundColor, (With<VjoyBase>, Without<VjoyKnob>)>,
     mut q_knob_col: Query<&mut BackgroundColor, (With<VjoyKnob>, Without<VjoyBase>)>,
 ) {
-    let Ok(base_node) = q_base.single() else { return; };
-    let Ok(mut knob_node) = q_knob.single_mut() else { return; };
+    let Ok((base_computed, _)) = q_base.single() else { return; };
+    let Ok((mut knob_node, knob_computed)) = q_knob.single_mut() else { return; };
     
-    let radius = base_node.size().x / 2.0;
-    
-    knob_node.left = Val::Px(vjoy_output.dir.x * radius);
-    knob_node.top = Val::Px(-vjoy_output.dir.y * radius);
+    if let Ok(mut base_node) = q_base_node.single_mut() {
+        base_node.width = Val::VMin(config.base_size_vmin);
+        base_node.height = Val::VMin(config.base_size_vmin);
+        base_node.left = Val::VMin(config.pos_left_vmin);
+        base_node.bottom = Val::VMin(config.pos_bottom_vmin);
+    }
+    knob_node.width = Val::VMin(config.knob_size_vmin);
+    knob_node.height = Val::VMin(config.knob_size_vmin);
 
-    let alpha = if active_touch.id.is_some() { 0.7 } else { 0.2 };
-    if let Ok(mut c) = q_base_col.single_mut() { c.0.set_alpha(alpha); }
-    if let Ok(mut c) = q_knob_col.single_mut() { c.0.set_alpha(alpha); }
+    let base_radius = base_computed.size().x / 2.0;
+    let knob_radius = knob_computed.size().x / 2.0;
+    let max_move: f32 = (base_radius - knob_radius).max(0.0);
+    
+    knob_node.left = Val::Px(vjoy_output.dir.x * max_move);
+    knob_node.top = Val::Px(-vjoy_output.dir.y * max_move);
+
+    let target_alpha = if active_touch.id.is_some() { 
+        config.alpha_active 
+    } else { 
+        config.alpha_idle 
+    };
+
+    if let Ok(mut c) = q_base_col.single_mut() { c.0.set_alpha(target_alpha); }
+    if let Ok(mut c) = q_knob_col.single_mut() { c.0.set_alpha(target_alpha); }
 }
