@@ -13,7 +13,7 @@ pub(crate) fn plugin(app: &mut App) {
                     primary_window: Some(Window {
                         // TODO: create a config file that contains all these config properties
                         title: "Bevy game".into(),
-                        resizable: false,
+                        resizable: true,
                         resolution: (800, 600).into(),
                         canvas: Some("#bevy".to_owned()),
                         desired_maximum_frame_latency: core::num::NonZero::new(1u32),
