@@ -15,10 +15,8 @@ pub(crate) fn plugin(app: &mut App) {
         .add_systems(Update, (
             planetary_control_system,
             tile_restoration_system,
+            sync_visuals,
         ).chain());
-
-    #[cfg(feature = "dev")]
-    app.add_systems(Update, sync_visuals);
 }
 
 fn setup_game(
@@ -81,26 +79,32 @@ fn planetary_control_system(
     let Ok((mut ball, mut ball_trans)) = q_player.single_mut() else { return; };
     let dt = time.delta_secs();
 
+    let size_factor = (4.0 / settings.player_radius).clamp(0.2, 2.0);
+    
+    let effective_accel = settings.acceleration * size_factor;
+    let effective_max_speed = settings.max_speed * size_factor;
+
     if joy.dir.length() > 0.01 {
-        let accel = Vec3::new(joy.dir.x, 0.0, -joy.dir.y) * settings.acceleration * dt;
-        ball.current_velocity += accel;
+        let accel_force = Vec3::new(joy.dir.x, 0.0, -joy.dir.y) * effective_accel * dt;
+        ball.current_velocity += accel_force;
     }
     
     ball.current_velocity *= settings.friction.powf(dt * 60.0);
     
-    if ball.current_velocity.length() > settings.max_speed {
-        ball.current_velocity = ball.current_velocity.normalize() * settings.max_speed;
+    if ball.current_velocity.length() > effective_max_speed {
+        ball.current_velocity = ball.current_velocity.normalize() * effective_max_speed;
     }
 
-    let speed = ball.current_velocity.length();
+    let current_speed = ball.current_velocity.length();
 
-    if speed > 0.1 {
+    if current_speed > 0.1 {
         let rotation_x = Quat::from_rotation_x(ball.current_velocity.z * dt / settings.radius);
         let rotation_z = Quat::from_rotation_z(-ball.current_velocity.x * dt / settings.radius);
         pivot_trans.rotation = pivot_trans.rotation * rotation_x * rotation_z;
 
-        let roll_speed = speed * dt / settings.player_radius;
-        if let Ok(axis) = Dir3::new(Vec3::new(ball.current_velocity.z, 0.0, -ball.current_velocity.x).normalize()) {
+        let roll_speed = current_speed * dt / settings.player_radius;
+        let roll_axis_raw = Vec3::new(ball.current_velocity.z, 0.0, -ball.current_velocity.x);
+        if let Ok(axis) = Dir3::new(roll_axis_raw.normalize()) {
             ball_trans.rotate_axis(axis, roll_speed);
         }
     }
@@ -141,19 +145,26 @@ fn tile_restoration_system(
     }
 }
 
-#[cfg(feature = "dev")]
 fn sync_visuals(
     settings: Res<PlanetSettings>,
-    mut q_planet: Query<&mut Transform, With<Planet>>,
-    mut q_ball: Query<&mut Transform, (With<PlayerBall>, Without<Planet>)>,
+    mut q_planet: Query<&mut Transform, (With<Planet>, Without<PlayerBall>, Without<BirdEyeCamera>)>,
+    mut q_ball: Query<&mut Transform, (With<PlayerBall>, Without<Planet>, Without<BirdEyeCamera>)>,
     mut q_cam: Query<&mut Transform, (With<BirdEyeCamera>, Without<Planet>, Without<PlayerBall>)>,
 ) {
-    if let Ok(mut t) = q_planet.single_mut() { t.scale = Vec3::splat(settings.radius); }
+    if let Ok(mut t) = q_planet.single_mut() { 
+        t.scale = Vec3::splat(settings.radius); 
+    }
+
     if let Ok(mut t) = q_ball.single_mut() { 
         t.scale = Vec3::splat(settings.player_radius); 
         t.translation.y = settings.radius + settings.player_radius;
     }
+
     if let Ok(mut t) = q_cam.single_mut() {
-        t.translation.y = settings.radius + settings.camera_height;
+        let dynamic_zoom = settings.camera_height + (settings.player_radius * 5.0);
+        t.translation.y = settings.radius + dynamic_zoom;
+        
+        let target = Vec3::new(0.0, settings.radius, 0.0);
+        t.look_at(target, -Vec3::Z);
     }
 }
