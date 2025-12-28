@@ -13,10 +13,10 @@ pub struct PlanetSettings {
 impl Default for PlanetSettings {
     fn default() -> Self {
         Self {
-            radius: 100.0,
-            subdivisions: 8,
+            radius: 150.0,
+            subdivisions: 16,
             player_speed: 60.0,
-            player_radius: 2.0,
+            player_radius: 4.0,
             camera_height: 100.0,
         }
     }
