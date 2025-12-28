@@ -6,4 +6,20 @@ pub(crate) fn plugin(app: &mut App) {
         LogDiagnosticsPlugin::default(),
         FrameTimeDiagnosticsPlugin::default(),
     ));
+
+    #[cfg(feature = "dev")]
+    {
+        use bevy_egui::EguiPlugin;
+        use bevy_inspector_egui::quick::ResourceInspectorPlugin;
+        use crate::resources::planet_settings::PlanetSettings;        
+        use crate::resources::vjoy_config::VjoyConfig;
+        use crate::resources::vjoy_output::VjoyOutput;
+        
+        app.add_plugins(EguiPlugin::default());
+        
+        app.add_plugins(ResourceInspectorPlugin::<PlanetSettings>::default());
+        
+        app.add_plugins(ResourceInspectorPlugin::<VjoyConfig>::default());
+        app.add_plugins(ResourceInspectorPlugin::<VjoyOutput>::default());
+    }
 }
