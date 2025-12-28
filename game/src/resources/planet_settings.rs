@@ -22,8 +22,8 @@ impl Default for PlanetSettings {
             player_speed: 60.0,
             player_radius: 4.0,
             camera_height: 100.0,
-            acceleration: 200.0,
-            friction: 0.92,
+            acceleration: 150.0,
+            friction: 0.985,
             max_speed: 80.0,
             camera_smoothing: 0.1,
         }

@@ -3,3 +3,4 @@ pub(super) mod vjoy_knob;
 pub(super) mod camera;
 pub(super) mod planet;
 pub(super) mod player_ball;
+pub(super) mod planet_pivot;
