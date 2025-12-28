@@ -2,5 +2,5 @@ use bevy::prelude::*;
 
 #[derive(Component)]
 pub struct BirdEyeCamera {
-    pub last_normal: Vec3,
+    pub manual_forward: Vec3
 }

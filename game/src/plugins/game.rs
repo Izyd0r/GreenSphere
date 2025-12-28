@@ -63,7 +63,7 @@ fn setup_game(
 
     let spawn_pos = Vec3::new(0.0, settings.radius + settings.player_radius, 0.0);
     commands.spawn((
-        PlayerBall,
+        PlayerBall::default(),
         Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(5).unwrap())),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.0, 1.0, 0.5),
@@ -73,10 +73,14 @@ fn setup_game(
     ));
 
     commands.spawn((
-        BirdEyeCamera { last_normal: Vec3::Y },
+        BirdEyeCamera { 
+            // Initial forward points toward World North (Y) 
+            // unless we are at the pole, then Z.
+            manual_forward: Vec3::Z, 
+        },
         Camera3d::default(),
         Transform::from_xyz(0.0, settings.radius + settings.camera_height, 0.0)
-            .looking_at(spawn_pos, -Vec3::Z),
+            .looking_at(Vec3::ZERO, -Vec3::Z),
     ));
 }
 
@@ -85,25 +89,37 @@ fn player_movement_system(
     time: Res<Time>,
     settings: Res<PlanetSettings>,
     q_camera: Query<&Transform, (With<BirdEyeCamera>, Without<PlayerBall>)>,
-    mut q_player: Query<&mut Transform, With<PlayerBall>>,
+    mut q_player: Query<(&mut Transform, &mut PlayerBall)>,
 ) {
-    let Ok(mut transform) = q_player.single_mut() else { return; };
+    let Ok((mut transform, mut player)) = q_player.single_mut() else { return; };
     let Ok(cam_transform) = q_camera.single() else { return; };
-    
-    if joy.dir.length() < 0.01 { return; }
+    let dt = time.delta_secs();
 
     let normal = transform.translation.normalize();
 
-    let move_direction = (cam_transform.right() * joy.dir.x + cam_transform.up() * joy.dir.y).normalize();
-    let movement = move_direction * settings.player_speed * time.delta_secs();
-    
-    transform.translation += movement;
+    // 1. ACCELERATION
+    if joy.dir.length() > 0.01 {
+        let move_dir = (cam_transform.right() * joy.dir.x + cam_transform.up() * joy.dir.y).normalize();
+        player.velocity += move_dir * settings.acceleration * dt;
+    }
 
+    // 2. FRICTION
+    player.velocity *= settings.friction.powf(dt * 60.0);
+
+    // 3. PROJECT VELOCITY (Keep it flat on the ground)
+    player.velocity = player.velocity - normal * player.velocity.dot(normal);
+
+    // 4. APPLY POSITION
+    transform.translation += player.velocity * dt;
     transform.translation = transform.translation.normalize() * (settings.radius + settings.player_radius);
 
-    if let Ok(axis) = Dir3::new(movement.cross(normal)) {
-        let angle = movement.length() / settings.player_radius;
-        transform.rotate_axis(axis, angle);
+    // --- THE FIX FOR THE CRASH ---
+    // We calculate the axis, then safely try to create a Dir3.
+    // Dir3::new returns 'Err' if the vector is too small or zero.
+    let raw_axis = player.velocity.cross(normal);
+    if let Ok(rotation_axis) = Dir3::new(raw_axis) {
+        let rotation_speed = player.velocity.length() * dt / settings.player_radius;
+        transform.rotate_axis(rotation_axis, rotation_speed);
     }
 }
 
@@ -115,19 +131,32 @@ fn camera_follow_system(
     let Ok(player_transform) = q_player.single() else { return; };
     let Ok((mut cam_transform, mut camera_state)) = q_camera.single_mut() else { return; };
 
-    let new_normal = player_transform.translation.normalize();
-    let old_normal = camera_state.last_normal;
+    let ball_pos = player_transform.translation;
+    let ball_normal = ball_pos.normalize();
 
-    if new_normal.distance_squared(old_normal) > 0.00001 {
-        let delta_rotation = Quat::from_rotation_arc(old_normal, new_normal);
-        
-        cam_transform.translation = delta_rotation * cam_transform.translation;
-        cam_transform.rotation = delta_rotation * cam_transform.rotation;
-    }
-
-    cam_transform.translation = new_normal * (settings.radius + settings.camera_height);
+    // 1. POSITIONING:
+    // Place the camera exactly (Radius + Height) away from the center, 
+    // aligned with the ball's position.
+    let target_translation = ball_normal * (settings.radius + settings.camera_height);
     
-    camera_state.last_normal = new_normal;
+    // Smoothly lerp the position to follow the ball's inertia
+    cam_transform.translation = cam_transform.translation.lerp(target_translation, settings.camera_smoothing);
+
+    // 2. ORIENTATION (The Look-At Fix):
+    // We want the camera to look at the ball, but we need a stable "Up" vector
+    // so it doesn't spin. We use our stored "manual_forward".
+    
+    // We project the stored forward onto the surface tangent so it's always "flat"
+    let forward_on_tangent = (camera_state.manual_forward - ball_normal * camera_state.manual_forward.dot(ball_normal)).normalize();
+    
+    // Update the camera to look at the ball.
+    // 'ball_pos' is where it looks.
+    // 'forward_on_tangent' is what the camera considers "Up" (top of your monitor).
+    cam_transform.look_at(ball_pos, forward_on_tangent);
+
+    // 3. STABILIZE FORWARD:
+    // Save the orientation for the next frame to prevent "Gimbal Lock" or spinning
+    camera_state.manual_forward = forward_on_tangent;
 }
 
 fn tile_restoration_system(

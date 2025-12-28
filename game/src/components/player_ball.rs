@@ -1,4 +1,6 @@
 use bevy::prelude::*;
 
-#[derive(Component)]
-pub struct PlayerBall;
+#[derive(Component, Default)]
+pub struct PlayerBall {
+    pub velocity: Vec3,
+}
