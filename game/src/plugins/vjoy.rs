@@ -35,16 +35,6 @@ pub(crate) fn plugin(app: &mut App) {
             joystick_input_system, 
             joystick_render_system 
         ).chain());
-
-    #[cfg(feature = "dev")]
-    {
-        use bevy_egui::EguiPlugin;
-        use bevy_inspector_egui::quick::ResourceInspectorPlugin;
-        
-        app.add_plugins(EguiPlugin::default());
-        app.add_plugins(ResourceInspectorPlugin::<VjoyConfig>::default());
-        app.add_plugins(ResourceInspectorPlugin::<VjoyOutput>::default());
-    }
 }
 
 /// Spawns the visual hierarchy of the joystick.

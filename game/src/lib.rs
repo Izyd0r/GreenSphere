@@ -18,7 +18,8 @@ impl Plugin for AppPlugin {
         // All custome plugins goes here
         app.add_plugins((
             plugins::defaults::plugin,
-            plugins::camera::plugin,
+            // plugins::camera::plugin,
+            plugins::game::plugin,
             plugins::vjoy::plugin,
         ));
         #[cfg(feature="dev")]
