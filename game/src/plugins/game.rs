@@ -10,7 +10,8 @@ use crate::components::player_ball::PlayerBall;
 use crate::components::planet_pivot::PlanetPivot;
 use crate::components::camera::BirdEyeCamera;
 use crate::resources::enemy_settings::EnemySettings;
-use crate::components::factory::AlienFactory;
+use crate::components::machine::AlienMachine;
+use crate::components::factory::{AlienFactory, FactorySpawner};
 
 pub(crate) fn plugin(app: &mut App) {
     app
@@ -24,7 +25,9 @@ pub(crate) fn plugin(app: &mut App) {
             planetary_control_system,
             tile_restoration_system,
             sync_visuals,
-            factory_billboard_system,
+            factory_spawner_system,
+            alien_ai_system,
+            billboard_system, 
             pollution_lifecycle_system,
         ).chain());
 }
@@ -267,6 +270,9 @@ fn spawn_factories(
 
         commands.spawn((
             AlienFactory,
+            FactorySpawner { 
+                timer: Timer::from_seconds(enemy_settings.machine_spawn_interval, TimerMode::Repeating) 
+            },
             Mesh3d(mesh_2d.clone()),
             MeshMaterial3d(material_factory.clone()),
             Transform::from_translation(spawn_pos)
@@ -302,29 +308,6 @@ fn pollute_area(
                 data.vertex_states[i] = TileState::Polluted;
                 v_col[i] = color;
             }
-        }
-    }
-}
-
-
-fn factory_billboard_system(
-    q_cam: Query<&GlobalTransform, With<BirdEyeCamera>>,
-    mut q_factories: Query<&mut Transform, With<AlienFactory>>,
-) {
-    let Ok(cam_gtrans) = q_cam.single() else { return; };
-    let cam_pos = cam_gtrans.translation();
-
-    for mut transform in q_factories.iter_mut() {
-        let factory_pos = transform.translation;
-        let surface_normal = factory_pos.normalize(); 
-        let to_cam = cam_pos - factory_pos;
-
-        let target_direction = to_cam - surface_normal * to_cam.dot(surface_normal);
-
-        if target_direction.length_squared() > 0.001 {
-            let look_target = factory_pos + target_direction;
-            
-            *transform = transform.looking_at(look_target, surface_normal);
         }
     }
 }
@@ -429,6 +412,112 @@ fn pollution_lifecycle_system(
                 planet_data.vertex_states[idx] = TileState::Polluted;
                 v_col[idx] = enemy_settings.pollution_color;
             }
+        }
+    }
+}
+
+fn factory_spawner_system(
+    time: Res<Time>,
+    settings: Res<PlanetSettings>,
+    enemy_settings: Res<EnemySettings>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
+    mut q_factories: Query<(&Transform, &mut FactorySpawner), With<AlienFactory>>,
+    mut commands: Commands,
+    mut local_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+) {
+    let (machine_mesh, machine_mat) = local_assets.get_or_insert_with(|| {
+        let mesh = meshes.add(Rectangle::new(6.0, 6.0));
+        let tex = asset_server.load("textures/machine.png");
+        let mat = materials.add(StandardMaterial {
+            base_color_texture: Some(tex),
+            alpha_mode: AlphaMode::Mask(0.5),
+            cull_mode: None,
+            unlit: true,
+            ..default()
+        });
+        (mesh, mat)
+    }).clone();
+
+    for (f_transform, mut spawner) in q_factories.iter_mut() {
+        spawner.timer.set_duration(std::time::Duration::from_secs_f32(enemy_settings.machine_spawn_interval));
+        spawner.timer.tick(time.delta());
+
+        if spawner.timer.just_finished() {
+            let mut rng = rand::rng();
+            let factory_pos = f_transform.translation;
+            let normal = factory_pos.normalize();
+
+            let random_vec = Vec3::new(
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0)
+            );
+            
+            let tangent = (random_vec - normal * random_vec.dot(normal)).normalize();
+            let spawn_pos = (factory_pos + tangent * 15.0).normalize() * (settings.radius + 3.0);
+
+            commands.spawn((
+                AlienMachine { velocity: Vec3::ZERO },
+                Mesh3d(machine_mesh.clone()),
+                MeshMaterial3d(machine_mat.clone()),
+                Transform::from_translation(spawn_pos),
+            ));
+        }
+    }
+}
+
+fn alien_ai_system(
+    time: Res<Time>,
+    settings: Res<PlanetSettings>,
+    enemy_settings: Res<EnemySettings>,
+    q_player: Query<&GlobalTransform, With<PlayerBall>>,
+    mut q_machines: Query<(&mut Transform, &mut AlienMachine)>,
+) {
+    let Ok(player_gtrans) = q_player.single() else { return; };
+    let player_pos = player_gtrans.translation();
+    let dt = time.delta_secs();
+
+    for (mut transform, mut machine) in q_machines.iter_mut() {
+        let machine_pos = transform.translation;
+        let dist = machine_pos.distance(player_pos);
+
+        if dist < enemy_settings.machine_detection_range && dist > 5.0 {
+            let normal = machine_pos.normalize();
+            
+            let to_player = player_pos - machine_pos;
+            let tangent_dir = (to_player - normal * to_player.dot(normal)).normalize();
+
+            machine.velocity += tangent_dir * enemy_settings.machine_acceleration * dt;
+        }
+
+        machine.velocity *= 0.95f32.powf(dt * 60.0);
+        if machine.velocity.length() > enemy_settings.machine_speed {
+            machine.velocity = machine.velocity.normalize() * enemy_settings.machine_speed;
+        }
+
+        transform.translation += machine.velocity * dt;
+        transform.translation = transform.translation.normalize() * (settings.radius + 3.0);
+    }
+}
+
+fn billboard_system(
+    q_cam: Query<&GlobalTransform, With<BirdEyeCamera>>,
+    mut q_billboards: Query<&mut Transform, Or<(With<AlienFactory>, With<AlienMachine>)>>,
+) {
+    let Ok(cam_gtrans) = q_cam.single() else { return; };
+    let cam_pos = cam_gtrans.translation();
+
+    for mut transform in q_billboards.iter_mut() {
+        let pos = transform.translation;
+        let normal = pos.normalize();
+        let to_cam = cam_pos - pos;
+        let target_dir = to_cam - normal * to_cam.dot(normal);
+
+        if target_dir.length_squared() > 0.001 {
+            let look_target = pos + target_dir;
+            *transform = transform.looking_at(look_target, normal);
         }
     }
 }

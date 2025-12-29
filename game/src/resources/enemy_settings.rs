@@ -9,6 +9,10 @@ pub struct EnemySettings {
     pub spread_tick_rate: f32,
     pub boosted_spread_chance: f32,
     pub natural_spread_chance: f32,
+    pub machine_spawn_interval: f32,
+    pub machine_speed: f32,
+    pub machine_detection_range: f32,
+    pub machine_acceleration: f32,
 }
 
 impl Default for EnemySettings {
@@ -20,6 +24,10 @@ impl Default for EnemySettings {
             spread_tick_rate: 10.0,
             boosted_spread_chance: 0.4,
             natural_spread_chance: 0.02,
+            machine_spawn_interval: 10.0,
+            machine_speed: 40.0,
+            machine_detection_range: 200.0,
+            machine_acceleration: 100.0,
         }
     }
 }
