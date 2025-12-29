@@ -233,17 +233,25 @@ fn sync_visuals(
 
 fn spawn_factories(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>, 
     mut materials: ResMut<Assets<StandardMaterial>>,
     settings: Res<PlanetSettings>,
     enemy_settings: Res<EnemySettings>,
     mut q_planet: Query<(&mut PlanetData, &Mesh3d, &Transform), With<Planet>>,
 ) {
-    let mesh_2d = meshes.add(Rectangle::new(10.0, 10.0));
+    let factory_texture = asset_server.load("textures/factory.png");
+    let factory_height = 12.0;
+
+
     let material_factory = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
+        base_color_texture: Some(factory_texture),
+        alpha_mode: AlphaMode::Mask(0.5), 
+        unlit: true, 
+        cull_mode: None, 
         ..default()
     });
+    let mesh_2d = meshes.add(Rectangle::new(12.0, factory_height));
 
     let mut rng = rand::rng();
     let Ok((mut planet_data, mesh_handle, planet_transform)) = q_planet.single_mut() else { return; };
@@ -254,7 +262,8 @@ fn spawn_factories(
         let theta = rng.random_range(0.0..std::f32::consts::TAU);
         let phi = (rng.random_range(-1.0..1.0) as f32).acos();
         let normal = Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos());
-        let spawn_pos = normal * settings.radius;
+        let offset_height = factory_height / 2.0;
+        let spawn_pos = normal * (settings.radius + offset_height);
 
         commands.spawn((
             AlienFactory,
@@ -264,10 +273,11 @@ fn spawn_factories(
                 .looking_at(spawn_pos + normal, Vec3::Y), 
         ));
 
+        let stain_pos = normal * settings.radius;
         pollute_area(
             &mut planet_data, 
             mesh, 
-            spawn_pos - planet_transform.translation, 
+            stain_pos - planet_transform.translation, 
             enemy_settings.pollution_radius / settings.radius,
             enemy_settings.pollution_color
         );
@@ -306,9 +316,16 @@ fn factory_billboard_system(
 
     for mut transform in q_factories.iter_mut() {
         let factory_pos = transform.translation;
-        let surface_normal = factory_pos.normalize();
-        
-        transform.look_at(cam_pos, surface_normal);
+        let surface_normal = factory_pos.normalize(); 
+        let to_cam = cam_pos - factory_pos;
+
+        let target_direction = to_cam - surface_normal * to_cam.dot(surface_normal);
+
+        if target_direction.length_squared() > 0.001 {
+            let look_target = factory_pos + target_direction;
+            
+            *transform = transform.looking_at(look_target, surface_normal);
+        }
     }
 }
 
