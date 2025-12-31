@@ -8,3 +8,4 @@ pub(super) mod factory;
 pub(super) mod machine;
 pub(super) mod dash;
 pub(super) mod ui;
+pub(super) mod orbs;

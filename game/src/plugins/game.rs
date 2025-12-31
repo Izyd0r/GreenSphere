@@ -15,6 +15,7 @@ use crate::components::factory::{AlienFactory, FactorySpawner};
 use crate::resources::dash_settings::DashSettings;
 use crate::resources::dash_state::DashState;
 use crate::components::ui::{HealthBarFill, HealthText};
+use crate::components::orbs::EnergyOrb;
 
 pub(crate) fn plugin(app: &mut App) {
     app
@@ -27,7 +28,6 @@ pub(crate) fn plugin(app: &mut App) {
         .add_systems(Update, (
             planetary_control_system,
             tile_restoration_system,
-            sync_visuals,
             factory_spawner_system,
             alien_ai_system,
             billboard_system, 
@@ -36,6 +36,10 @@ pub(crate) fn plugin(app: &mut App) {
             player_health_sync_system,
             update_health_bar_system,
             player_invincibility_system,
+            orb_spawning_system,
+            orb_collection_system,
+            orb_animation_system,
+            sync_visuals,
         ).chain());
 }
 
@@ -692,5 +696,91 @@ fn player_invincibility_system(
     let Ok(mut player) = q_player.single_mut() else { return; };
     if player.invincibility_timer > 0.0 {
         player.invincibility_timer = (player.invincibility_timer - time.delta_secs()).max(0.0);
+    }
+}
+
+fn orb_spawning_system(
+    mut commands: Commands,
+    settings: Res<PlanetSettings>,
+    mut meshes: ResMut<Assets<Mesh>>, 
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    q_planet: Query<(&PlanetData, &Mesh3d), With<Planet>>,
+    q_orbs: Query<Entity, With<EnergyOrb>>,
+    mut local_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+) {
+    if q_orbs.iter().count() >= settings.max_orbs { return; }
+    
+    let mut rng = rand::rng();
+    if rng.random::<f32>() > settings.orb_spawn_chance { return; }
+
+    if local_assets.is_none() {
+        let m = meshes.add(Sphere::new(2.0).mesh().ico(4).unwrap());
+        let mat = materials.add(StandardMaterial {
+            base_color: Color::srgba(0.0, 5.0, 1.0, 1.0),
+            emissive: LinearRgba::GREEN * 10.0,
+            ..default()
+        });
+        *local_assets = Some((m, mat));
+    }
+    let (orb_mesh, orb_mat) = local_assets.as_ref().unwrap().clone();
+
+    let Ok((planet_data, mesh_handle)) = q_planet.single() else { return; };
+    let Some(mesh) = meshes.get(mesh_handle) else { return; };
+
+    let healthy_indices: Vec<usize> = planet_data.vertex_states.iter()
+        .enumerate()
+        .filter(|(_, state)| **state == TileState::Healthy)
+        .map(|(idx, _)| idx)
+        .collect();
+
+    if healthy_indices.is_empty() { return; }
+
+    let random_idx = healthy_indices[rng.random_range(0..healthy_indices.len())];
+
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x3(v_pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        let normal = Vec3::from(v_pos[random_idx]).normalize();
+        
+        let spawn_pos = normal * (settings.radius + 5.0);
+
+        commands.spawn((
+            EnergyOrb,
+            Mesh3d(orb_mesh),
+            MeshMaterial3d(orb_mat),
+            Transform::from_translation(spawn_pos),
+        ));
+    }
+}
+
+fn orb_collection_system(
+    mut commands: Commands,
+    settings: Res<PlanetSettings>,
+    mut q_player: Query<(&GlobalTransform, &mut PlayerBall)>,
+    q_orbs: Query<(Entity, &GlobalTransform), With<EnergyOrb>>,
+) {
+    let Ok((player_gtrans, mut player)) = q_player.single_mut() else { return; };
+    let player_pos = player_gtrans.translation();
+
+    for (orb_entity, orb_gtrans) in q_orbs.iter() {
+        let orb_pos = orb_gtrans.translation();
+        
+        if player_pos.distance(orb_pos) < settings.player_radius + 3.0 {
+            player.hp = (player.hp + settings.orb_hp_gain).min(100.0);
+            
+            commands.entity(orb_entity).despawn_children();
+            commands.entity(orb_entity).despawn();
+        }
+    }
+}
+
+fn orb_animation_system(
+    time: Res<Time>,
+    mut q_orbs: Query<&mut Transform, With<EnergyOrb>>,
+) {
+    let t = time.elapsed_secs();
+    for mut transform in q_orbs.iter_mut() {
+        transform.rotate_y(0.05);
+        let offset = (t * 2.0).sin() * 0.5;
+        let normal = transform.translation.normalize();
+        transform.translation += normal * offset * 0.1;
     }
 }
