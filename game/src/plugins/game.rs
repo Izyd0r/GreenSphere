@@ -31,6 +31,7 @@ pub(crate) fn plugin(app: &mut App) {
             alien_ai_system,
             billboard_system, 
             pollution_lifecycle_system,
+            enemy_collision_system,
         ).chain());
 }
 
@@ -538,6 +539,35 @@ fn billboard_system(
         if target_dir.length_squared() > 0.001 {
             let look_target = pos + target_dir;
             *transform = transform.looking_at(look_target, normal);
+        }
+    }
+}
+
+fn enemy_collision_system(
+    mut commands: Commands,
+    dash_state: Res<DashState>,
+    settings: Res<PlanetSettings>,
+    q_player: Query<&GlobalTransform, With<PlayerBall>>,
+    q_machines: Query<(Entity, &GlobalTransform), With<AlienMachine>>,
+    q_factories: Query<(Entity, &GlobalTransform), With<AlienFactory>>,
+) {
+    if !dash_state.is_active { return; }
+
+    let Ok(player_gtrans) = q_player.single() else { return; };
+    let player_pos = player_gtrans.translation();
+    let player_radius = settings.player_radius;
+
+    for (entity, machine_gtrans) in q_machines.iter() {
+        if player_pos.distance(machine_gtrans.translation()) < player_radius + 3.0 {
+            commands.entity(entity).despawn_children();
+            commands.entity(entity).despawn();
+        }
+    }
+
+    for (entity, factory_gtrans) in q_factories.iter() {
+        if player_pos.distance(factory_gtrans.translation()) < player_radius + 6.0 {
+            commands.entity(entity).despawn_children();
+            commands.entity(entity).despawn();
         }
     }
 }
