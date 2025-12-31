@@ -12,6 +12,7 @@ pub enum TileState {
 #[reflect(Component)]
 pub struct PlanetData {
     pub vertex_states: Vec<TileState>,
+    pub adjacency: Vec<Vec<usize>>, 
 }
 
 #[derive(Component)]

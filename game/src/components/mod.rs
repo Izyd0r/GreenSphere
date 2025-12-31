@@ -4,3 +4,5 @@ pub(super) mod camera;
 pub(super) mod planet;
 pub(super) mod player_ball;
 pub(super) mod planet_pivot;
+pub(super) mod factory;
+pub(super) mod machine;
