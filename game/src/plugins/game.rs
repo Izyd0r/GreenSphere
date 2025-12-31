@@ -12,6 +12,10 @@ use crate::components::camera::BirdEyeCamera;
 use crate::resources::enemy_settings::EnemySettings;
 use crate::components::machine::AlienMachine;
 use crate::components::factory::{AlienFactory, FactorySpawner};
+use crate::resources::dash_settings::DashSettings;
+use crate::resources::dash_state::DashState;
+use crate::components::ui::{HealthBarFill, HealthText};
+use crate::components::orbs::EnergyOrb;
 
 pub(crate) fn plugin(app: &mut App) {
     app
@@ -20,15 +24,22 @@ pub(crate) fn plugin(app: &mut App) {
         .register_type::<PlanetSettings>()
         .register_type::<EnemySettings>()
         .add_systems(Startup, setup_game)
-        .add_systems(PostStartup, (build_adjacency, spawn_factories).chain())        
+        .add_systems(PostStartup, (build_adjacency, spawn_factories, spawn_health_bar).chain())        
         .add_systems(Update, (
             planetary_control_system,
             tile_restoration_system,
-            sync_visuals,
             factory_spawner_system,
             alien_ai_system,
             billboard_system, 
             pollution_lifecycle_system,
+            enemy_collision_system,
+            player_health_sync_system,
+            update_health_bar_system,
+            player_invincibility_system,
+            orb_spawning_system,
+            orb_collection_system,
+            orb_animation_system,
+            sync_visuals,
         ).chain());
 }
 
@@ -68,7 +79,7 @@ fn setup_game(
     ))
     .with_children(|parent| {
         parent.spawn((
-            PlayerBall { current_velocity: Vec3::ZERO }, 
+            PlayerBall { current_velocity: Vec3::ZERO, hp: 50.0, invincibility_timer: 0.0 }, 
             Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(5).unwrap())),
             MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.0, 1.0, 0.5), ..default() })),
             Transform::from_xyz(0.0, settings.radius + settings.player_radius, 0.0)
@@ -137,6 +148,8 @@ fn planetary_control_system(
     joy: Res<VjoyOutput>,
     time: Res<Time>,
     settings: Res<PlanetSettings>,
+    dash_settings: Res<DashSettings>,
+    state: Res<DashState>, 
     mut q_pivot: Query<&mut Transform, With<PlanetPivot>>,
     mut q_player: Query<(&mut PlayerBall, &mut Transform), (Without<PlanetPivot>, Without<BirdEyeCamera>)>,
 ) {
@@ -153,11 +166,27 @@ fn planetary_control_system(
         let accel_force = Vec3::new(joy.dir.x, 0.0, -joy.dir.y) * effective_accel * dt;
         ball.current_velocity += accel_force;
     }
+
+    if state.is_active && state.duration_timer >= (dash_settings.dash_duration - dt) {
+        let dash_dir = if joy.dir.length() > 0.1 {
+            Vec3::new(joy.dir.x, 0.0, -joy.dir.y).normalize()
+        } else {
+            ball.current_velocity.normalize_or_zero()
+        };
+
+        ball.current_velocity += dash_dir * dash_settings.dash_force * size_factor;
+    }
     
-    ball.current_velocity *= settings.friction.powf(dt * 60.0);
-    
-    if ball.current_velocity.length() > effective_max_speed {
-        ball.current_velocity = ball.current_velocity.normalize() * effective_max_speed;
+    if state.is_active {
+        ball.current_velocity *= 0.99f32.powf(dt * 60.0);
+        
+    } else {
+        ball.current_velocity *= settings.friction.powf(dt * 60.0);
+        
+        if ball.current_velocity.length() > effective_max_speed {
+            let target_vel = ball.current_velocity.normalize() * effective_max_speed;
+            ball.current_velocity = ball.current_velocity.lerp(target_vel, 0.1);
+        }
     }
 
     let current_speed = ball.current_velocity.length();
@@ -169,7 +198,7 @@ fn planetary_control_system(
 
         let roll_speed = current_speed * dt / settings.player_radius;
         let roll_axis_raw = Vec3::new(ball.current_velocity.z, 0.0, -ball.current_velocity.x);
-        if let Ok(axis) = Dir3::new(roll_axis_raw.normalize()) {
+        if let Ok(axis) = Dir3::new(roll_axis_raw.normalize_or_zero()) {
             ball_trans.rotate_axis(axis, roll_speed);
         }
     }
@@ -212,17 +241,32 @@ fn tile_restoration_system(
 
 fn sync_visuals(
     settings: Res<PlanetSettings>,
+    time: Res<Time>,
     mut q_planet: Query<&mut Transform, (With<Planet>, Without<PlayerBall>, Without<BirdEyeCamera>)>,
-    mut q_ball: Query<&mut Transform, (With<PlayerBall>, Without<Planet>, Without<BirdEyeCamera>)>,
+    mut q_ball: Query<(&PlayerBall, &mut Transform, &MeshMaterial3d<StandardMaterial>), (Without<Planet>, Without<BirdEyeCamera>)>,
     mut q_cam: Query<&mut Transform, (With<BirdEyeCamera>, Without<Planet>, Without<PlayerBall>)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     if let Ok(mut t) = q_planet.single_mut() { 
         t.scale = Vec3::splat(settings.radius); 
     }
 
-    if let Ok(mut t) = q_ball.single_mut() { 
+    if let Ok((player_logic, mut t, mat_handle)) = q_ball.single_mut() { 
         t.scale = Vec3::splat(settings.player_radius); 
         t.translation.y = settings.radius + settings.player_radius;
+
+        if let Some(mat) = materials.get_mut(mat_handle) {
+            if player_logic.invincibility_timer > 0.0 {
+                let blink = (time.elapsed_secs() * 20.0).sin() > 0.0;
+                mat.base_color = if blink {
+                    Color::srgba(1.0, 1.0, 1.0, 0.2)
+                } else {
+                    Color::srgb(0.0, 1.0, 0.5)
+                };
+            } else {
+                mat.base_color = Color::srgb(0.0, 1.0, 0.5);
+            }
+        }
     }
 
     if let Ok(mut t) = q_cam.single_mut() {
@@ -519,5 +563,224 @@ fn billboard_system(
             let look_target = pos + target_dir;
             *transform = transform.looking_at(look_target, normal);
         }
+    }
+}
+
+fn enemy_collision_system(
+    mut commands: Commands,
+    dash_state: Res<DashState>,
+    settings: Res<PlanetSettings>,
+    mut q_player: Query<(&GlobalTransform, &mut PlayerBall)>,
+    q_machines: Query<(Entity, &GlobalTransform), With<AlienMachine>>,
+    q_factories: Query<(Entity, &GlobalTransform), With<AlienFactory>>,
+) {
+    let Ok((player_gtrans, mut player)) = q_player.single_mut() else { return; };
+    let player_pos = player_gtrans.translation();
+    let player_radius = settings.player_radius;
+
+    for (entity, machine_gtrans) in q_machines.iter() {
+        if player_pos.distance(machine_gtrans.translation()) < settings.player_radius + 3.0 {
+            if dash_state.is_active {
+                commands.entity(entity).despawn_children();
+                commands.entity(entity).despawn();
+            } else if !settings.god_mode && player.invincibility_timer <= 0.0 {
+                player.hp = (player.hp - 25.0).max(0.0);
+                player.invincibility_timer = 5.0; 
+                commands.entity(entity).despawn_children();
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+
+    if dash_state.is_active {
+        for (entity, factory_gtrans) in q_factories.iter() {
+            if player_pos.distance(factory_gtrans.translation()) < player_radius + 6.0 {
+                commands.entity(entity).despawn_children();
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+}
+
+fn player_health_sync_system(
+    mut settings: ResMut<PlanetSettings>,
+    q_player: Query<&PlayerBall>,
+) {
+    let Ok(player) = q_player.single() else { return; };
+    
+    let target_radius = (player.hp / 100.0) * settings.max_hp_radius;
+    settings.player_radius = target_radius.max(2.0);
+}
+
+fn spawn_health_bar(mut commands: Commands) {
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column, 
+            align_items: AlignItems::Center,
+            left: Val::Percent(50.0),
+            bottom: Val::VMin(18.0),
+            margin: UiRect::left(Val::VMin(-15.0)),
+            ..default()
+        },
+        ZIndex(100),
+    ))
+    .with_children(|parent| {
+        parent.spawn((
+            Text::new("HEALTH"),
+            TextFont { font_size: 14.0, ..default() },
+            TextColor(Color::WHITE),
+            Node { margin: UiRect::bottom(Val::Px(4.0)), ..default() },
+        ));
+
+        parent.spawn((
+            Node {
+                width: Val::VMin(30.0),
+                height: Val::VMin(2.5),
+                display: Display::Flex,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
+            BorderRadius::all(Val::Px(4.0)),
+        ))
+        .with_children(|bar| {
+            bar.spawn((
+                HealthBarFill,
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.0, 1.0, 0.0)),
+                BorderRadius::all(Val::Px(4.0)),
+            ));
+
+            bar.spawn((
+                HealthText,
+                Text::new("100 / 100"),
+                TextFont { font_size: 14.0, ..default() },
+                TextColor(Color::WHITE),
+                ZIndex(1),
+            ));
+        });
+    });
+}
+
+fn update_health_bar_system(
+    q_player: Query<&PlayerBall, Changed<PlayerBall>>,
+    mut q_fill: Query<(&mut Node, &mut BackgroundColor), With<HealthBarFill>>,
+    mut q_text: Query<&mut Text, With<HealthText>>,
+) {
+    let Ok(player) = q_player.single() else { return; };
+    
+    if let Ok((mut node, mut color)) = q_fill.single_mut() {
+        node.width = Val::Percent(player.hp);
+        let hp_ratio = player.hp / 100.0;
+        color.0 = Color::srgba(1.0 - hp_ratio, hp_ratio, 0.0, 1.0);
+    }
+
+    if let Ok(mut text) = q_text.single_mut() {
+        text.0 = format!("{:.0} / 100", player.hp);
+    }
+}
+
+fn player_invincibility_system(
+    time: Res<Time>,
+    mut q_player: Query<&mut PlayerBall>,
+) {
+    let Ok(mut player) = q_player.single_mut() else { return; };
+    if player.invincibility_timer > 0.0 {
+        player.invincibility_timer = (player.invincibility_timer - time.delta_secs()).max(0.0);
+    }
+}
+
+fn orb_spawning_system(
+    mut commands: Commands,
+    settings: Res<PlanetSettings>,
+    mut meshes: ResMut<Assets<Mesh>>, 
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    q_planet: Query<(&PlanetData, &Mesh3d), With<Planet>>,
+    q_orbs: Query<Entity, With<EnergyOrb>>,
+    mut local_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+) {
+    if q_orbs.iter().count() >= settings.max_orbs { return; }
+    
+    let mut rng = rand::rng();
+    if rng.random::<f32>() > settings.orb_spawn_chance { return; }
+
+    if local_assets.is_none() {
+        let m = meshes.add(Sphere::new(2.0).mesh().ico(4).unwrap());
+        let mat = materials.add(StandardMaterial {
+            base_color: Color::srgba(0.0, 5.0, 1.0, 1.0),
+            emissive: LinearRgba::GREEN * 10.0,
+            ..default()
+        });
+        *local_assets = Some((m, mat));
+    }
+    let (orb_mesh, orb_mat) = local_assets.as_ref().unwrap().clone();
+
+    let Ok((planet_data, mesh_handle)) = q_planet.single() else { return; };
+    let Some(mesh) = meshes.get(mesh_handle) else { return; };
+
+    let healthy_indices: Vec<usize> = planet_data.vertex_states.iter()
+        .enumerate()
+        .filter(|(_, state)| **state == TileState::Healthy)
+        .map(|(idx, _)| idx)
+        .collect();
+
+    if healthy_indices.is_empty() { return; }
+
+    let random_idx = healthy_indices[rng.random_range(0..healthy_indices.len())];
+
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x3(v_pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        let normal = Vec3::from(v_pos[random_idx]).normalize();
+        
+        let spawn_pos = normal * (settings.radius + 5.0);
+
+        commands.spawn((
+            EnergyOrb,
+            Mesh3d(orb_mesh),
+            MeshMaterial3d(orb_mat),
+            Transform::from_translation(spawn_pos),
+        ));
+    }
+}
+
+fn orb_collection_system(
+    mut commands: Commands,
+    settings: Res<PlanetSettings>,
+    mut q_player: Query<(&GlobalTransform, &mut PlayerBall)>,
+    q_orbs: Query<(Entity, &GlobalTransform), With<EnergyOrb>>,
+) {
+    let Ok((player_gtrans, mut player)) = q_player.single_mut() else { return; };
+    let player_pos = player_gtrans.translation();
+
+    for (orb_entity, orb_gtrans) in q_orbs.iter() {
+        let orb_pos = orb_gtrans.translation();
+        
+        if player_pos.distance(orb_pos) < settings.player_radius + 3.0 {
+            player.hp = (player.hp + settings.orb_hp_gain).min(100.0);
+            
+            commands.entity(orb_entity).despawn_children();
+            commands.entity(orb_entity).despawn();
+        }
+    }
+}
+
+fn orb_animation_system(
+    time: Res<Time>,
+    mut q_orbs: Query<&mut Transform, With<EnergyOrb>>,
+) {
+    let t = time.elapsed_secs();
+    for mut transform in q_orbs.iter_mut() {
+        transform.rotate_y(0.05);
+        let offset = (t * 2.0).sin() * 0.5;
+        let normal = transform.translation.normalize();
+        transform.translation += normal * offset * 0.1;
     }
 }

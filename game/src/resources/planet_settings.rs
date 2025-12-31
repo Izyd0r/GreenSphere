@@ -12,6 +12,11 @@ pub struct PlanetSettings {
     pub friction: f32,
     pub max_speed: f32,
     pub camera_smoothing: f32,
+    pub god_mode: bool,
+    pub max_hp_radius: f32,
+    pub orb_hp_gain: f32,
+    pub max_orbs: usize,
+    pub orb_spawn_chance: f32,
 }
 
 impl Default for PlanetSettings {
@@ -26,6 +31,11 @@ impl Default for PlanetSettings {
             friction: 0.985,
             max_speed: 80.0,
             camera_smoothing: 0.1,
+            god_mode: false,
+            max_hp_radius: 16.0,
+            orb_hp_gain: 25.0,
+            max_orbs: 10,
+            orb_spawn_chance: 0.002,
         }
     }
 }
