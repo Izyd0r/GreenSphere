@@ -18,7 +18,11 @@ use crate::prelude::{
     vjoy_base::VjoyBase, 
     vjoy_knob::VjoyKnob, 
     vjoy_output::VjoyOutput,
-    vjoy_config::VjoyConfig
+    vjoy_config::VjoyConfig,
+    dash::DashButton,
+    dash::DashMeter,
+    dash_settings::DashSettings,
+    dash_state::DashState
 };
 
 /// Main entry point for the Virtual Joystick functionality.
@@ -28,12 +32,20 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<VjoyConfig>()
         .init_resource::<VjoyOutput>()
         .init_resource::<ActiveTouch>()
+        .init_resource::<DashState>()
+        .init_resource::<DashSettings>()
         .register_type::<VjoyConfig>()
-        .register_type::<VjoyOutput>() 
-        .add_systems(Startup, spawn_joystick)
+        .register_type::<VjoyOutput>()
+        .register_type::<DashState>()
+        .register_type::<DashSettings>() 
+        .add_systems(Startup, (
+            spawn_joystick,
+            spawn_dash_button
+        ).chain())
         .add_systems(Update, (
             joystick_input_system, 
-            joystick_render_system 
+            joystick_render_system,
+            dash_input_system
         ).chain());
 }
 
@@ -181,4 +193,88 @@ fn joystick_render_system(
 
     if let Ok(mut c) = q_base_col.single_mut() { c.0.set_alpha(target_alpha); }
     if let Ok(mut c) = q_knob_col.single_mut() { c.0.set_alpha(target_alpha); }
+}
+
+fn spawn_dash_button(mut commands: Commands) {
+    let vertical_level = Val::VMin(15.0); 
+    let horizontal_offset = Val::VMin(25.0); 
+
+    commands.spawn((
+        DashButton,
+        Interaction::default(),
+        Node {
+            width: Val::VMin(15.0),
+            height: Val::VMin(15.0),
+            position_type: PositionType::Absolute,
+            right: horizontal_offset, 
+            bottom: vertical_level,
+            display: Display::Flex,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+        BorderRadius::all(Val::Percent(50.0)),
+        ZIndex(100),
+    ))
+    .with_children(|parent| {
+        parent.spawn((
+            DashMeter,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 1.0, 1.0, 0.3)),
+            BorderRadius::all(Val::Percent(50.0)),
+        ));
+    });
+}
+
+fn dash_input_system(
+    time: Res<Time>,
+    settings: Res<DashSettings>,
+    mut state: ResMut<DashState>,
+    mut q_button: Query<(&Interaction, &mut BackgroundColor), (With<DashButton>, Without<DashMeter>)>,
+    mut q_meter: Query<(&mut Node, &mut BackgroundColor), (With<DashMeter>, Without<DashButton>)>,
+) {
+    let dt = time.delta_secs();
+    
+    let Ok((interaction, mut btn_bg)) = q_button.single_mut() else { return; };
+    let Ok((mut meter_node, mut meter_bg)) = q_meter.single_mut() else { return; };
+
+    state.current_energy = (state.current_energy + settings.regen_rate * dt).min(settings.max_energy);
+    state.cooldown_timer = (state.cooldown_timer - dt).max(0.0);
+
+    if state.duration_timer > 0.0 {
+        state.duration_timer -= dt;
+        if state.duration_timer <= 0.0 {
+            state.is_active = false; 
+        }
+    }
+
+    let is_ready = state.current_energy >= settings.max_energy && state.cooldown_timer <= 0.0;
+
+    if state.is_active {
+        btn_bg.0 = Color::srgba(0.0, 1.0, 1.0, 1.0); // Solid Cyan
+    } else if is_ready {
+        // Ready to dash
+        btn_bg.0 = Color::srgba(1.0, 1.0, 1.0, 0.9);
+        meter_bg.0 = Color::srgba(0.0, 1.0, 1.0, 0.8);
+    } else {
+        // Recharging
+        btn_bg.0 = Color::srgba(0.2, 0.2, 0.2, 0.2);
+        meter_bg.0 = Color::srgba(0.0, 0.5, 0.5, 0.3);
+    }
+
+    if *interaction == Interaction::Pressed && is_ready {
+        state.is_active = true;
+        state.duration_timer = settings.dash_duration;
+        state.current_energy = 0.0;
+        state.cooldown_timer = settings.cooldown_secs;
+    }
+
+    let energy_pct = state.current_energy / settings.max_energy;
+    meter_node.width = Val::Percent(energy_pct * 100.0);
+    meter_node.height = Val::Percent(energy_pct * 100.0);
 }

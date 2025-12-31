@@ -6,3 +6,4 @@ pub(super) mod player_ball;
 pub(super) mod planet_pivot;
 pub(super) mod factory;
 pub(super) mod machine;
+pub(super) mod dash;

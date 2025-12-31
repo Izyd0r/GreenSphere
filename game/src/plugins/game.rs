@@ -12,6 +12,8 @@ use crate::components::camera::BirdEyeCamera;
 use crate::resources::enemy_settings::EnemySettings;
 use crate::components::machine::AlienMachine;
 use crate::components::factory::{AlienFactory, FactorySpawner};
+use crate::resources::dash_settings::DashSettings;
+use crate::resources::dash_state::DashState;
 
 pub(crate) fn plugin(app: &mut App) {
     app
@@ -137,6 +139,8 @@ fn planetary_control_system(
     joy: Res<VjoyOutput>,
     time: Res<Time>,
     settings: Res<PlanetSettings>,
+    dash_settings: Res<DashSettings>,
+    state: Res<DashState>, 
     mut q_pivot: Query<&mut Transform, With<PlanetPivot>>,
     mut q_player: Query<(&mut PlayerBall, &mut Transform), (Without<PlanetPivot>, Without<BirdEyeCamera>)>,
 ) {
@@ -153,11 +157,27 @@ fn planetary_control_system(
         let accel_force = Vec3::new(joy.dir.x, 0.0, -joy.dir.y) * effective_accel * dt;
         ball.current_velocity += accel_force;
     }
+
+    if state.is_active && state.duration_timer >= (dash_settings.dash_duration - dt) {
+        let dash_dir = if joy.dir.length() > 0.1 {
+            Vec3::new(joy.dir.x, 0.0, -joy.dir.y).normalize()
+        } else {
+            ball.current_velocity.normalize_or_zero()
+        };
+
+        ball.current_velocity += dash_dir * dash_settings.dash_force * size_factor;
+    }
     
-    ball.current_velocity *= settings.friction.powf(dt * 60.0);
-    
-    if ball.current_velocity.length() > effective_max_speed {
-        ball.current_velocity = ball.current_velocity.normalize() * effective_max_speed;
+    if state.is_active {
+        ball.current_velocity *= 0.99f32.powf(dt * 60.0);
+        
+    } else {
+        ball.current_velocity *= settings.friction.powf(dt * 60.0);
+        
+        if ball.current_velocity.length() > effective_max_speed {
+            let target_vel = ball.current_velocity.normalize() * effective_max_speed;
+            ball.current_velocity = ball.current_velocity.lerp(target_vel, 0.1);
+        }
     }
 
     let current_speed = ball.current_velocity.length();
@@ -169,7 +189,7 @@ fn planetary_control_system(
 
         let roll_speed = current_speed * dt / settings.player_radius;
         let roll_axis_raw = Vec3::new(ball.current_velocity.z, 0.0, -ball.current_velocity.x);
-        if let Ok(axis) = Dir3::new(roll_axis_raw.normalize()) {
+        if let Ok(axis) = Dir3::new(roll_axis_raw.normalize_or_zero()) {
             ball_trans.rotate_axis(axis, roll_speed);
         }
     }
