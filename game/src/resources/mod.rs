@@ -5,3 +5,4 @@ pub(super) mod planet_settings;
 pub(super) mod enemy_settings;
 pub(super) mod dash_settings;
 pub(super) mod dash_state;
+pub(super) mod score;

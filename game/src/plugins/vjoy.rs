@@ -38,20 +38,16 @@ pub(crate) fn plugin(app: &mut App) {
         .register_type::<VjoyOutput>()
         .register_type::<DashState>()
         .register_type::<DashSettings>() 
-        .add_systems(Startup, (
-            spawn_joystick,
-            spawn_dash_button
-        ).chain())
         .add_systems(Update, (
-            joystick_input_system, 
-            joystick_render_system,
-            dash_input_system
+            joystick_input_system.run_if(any_with_component::<VjoyBase>), 
+            joystick_render_system.run_if(any_with_component::<VjoyBase>),
+            dash_input_system.run_if(any_with_component::<DashButton>),
         ).chain());
 }
 
 /// Spawns the visual hierarchy of the joystick.
 /// The Base is positioned using `VMin` to stay responsive across screen sizes.
-fn spawn_joystick(mut commands: Commands, config: Res<VjoyConfig>) {
+pub fn spawn_joystick(mut commands: Commands, config: Res<VjoyConfig>) {
     commands.spawn((
         VjoyBase::default(),
         Interaction::default(),
@@ -195,7 +191,7 @@ fn joystick_render_system(
     if let Ok(mut c) = q_knob_col.single_mut() { c.0.set_alpha(target_alpha); }
 }
 
-fn spawn_dash_button(mut commands: Commands) {
+pub fn spawn_dash_button(mut commands: Commands) {
     let vertical_level = Val::VMin(15.0); 
     let horizontal_offset = Val::VMin(25.0); 
 
