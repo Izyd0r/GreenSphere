@@ -24,14 +24,23 @@ use crate::prelude::{
     dash::DashButton,
 };
 use crate::resources::session_time::SessionTime;
+use crate::resources::player_profile::PlayerProfile;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default, Reflect)]
 pub enum GameState {
     #[default]
+    MainMenu,
     Resetting,
     GameOver,
     Playing,
 }
+
+#[derive(Component)]
+pub struct MainMenuRoot;
+
+#[derive(Component)]
+pub struct StartButton;
+
 
 pub(crate) fn plugin(app: &mut App) {
     app
@@ -40,11 +49,15 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<EnemySettings>()
         .init_resource::<Score>()
         .init_resource::<SessionTime>()
+        .init_resource::<PlayerProfile>()
         .add_message::<ScoreMessage>()
         .register_type::<Score>()
         .register_type::<PlanetSettings>()
         .register_type::<EnemySettings>()
         .add_systems(Startup, (setup_planet, build_adjacency).chain())
+        .add_systems(OnEnter(GameState::MainMenu), setup_main_menu)
+        .add_systems(Update, main_menu_system.run_if(in_state(GameState::MainMenu)))
+        .add_systems(OnExit(GameState::MainMenu), cleanup_main_menu)
         .add_systems(OnEnter(GameState::Playing), (
             spawn_session_objects, 
             spawn_factories,
@@ -104,30 +117,14 @@ fn setup_planet(
         MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::WHITE, ..default() })),
         Transform::from_scale(Vec3::splat(settings.radius)),
     ));
-}
 
-fn spawn_session_objects(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    settings: Res<PlanetSettings>,
-) {
     commands.spawn((
         PlanetPivot,
-        SessionEntity,
         Transform::IDENTITY,
         Visibility::Inherited,
         InheritedVisibility::default(),
     ))
     .with_children(|parent| {
-        parent.spawn((
-            PlayerBall { current_velocity: Vec3::ZERO, hp: 100.0, invincibility_timer: 0.0 }, 
-            Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(5).unwrap())),
-            MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.0, 1.0, 0.5), ..default() })),
-            Transform::from_xyz(0.0, settings.radius + settings.player_radius, 0.0)
-                .with_scale(Vec3::splat(settings.player_radius)),
-        ));
-
         parent.spawn((
             BirdEyeCamera,
             Camera3d::default(),
@@ -135,6 +132,26 @@ fn spawn_session_objects(
                 .looking_at(Vec3::new(0.0, settings.radius, 0.0), -Vec3::Z),
         ));
     });
+}
+
+fn spawn_session_objects(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    settings: Res<PlanetSettings>,
+    q_pivot: Query<Entity, With<PlanetPivot>>,
+) {
+    let Ok(pivot_entity) = q_pivot.single() else { return; };
+
+    let ball_entity = commands.spawn((
+        PlayerBall { current_velocity: Vec3::ZERO, hp: 100.0, invincibility_timer: 0.0 }, 
+        Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(5).unwrap())),
+        MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.0, 1.0, 0.5), ..default() })),
+        Transform::from_xyz(0.0, settings.radius + settings.player_radius, 0.0)
+            .with_scale(Vec3::splat(settings.player_radius)),
+    )).id();
+
+    commands.entity(pivot_entity).add_child(ball_entity);
 }
 
 fn build_adjacency(
@@ -949,15 +966,13 @@ fn cleanup_death_menu(mut commands: Commands, q_root: Query<Entity, With<DeathMe
 fn world_reset_system(
     mut commands: Commands,
     mut next_state: ResMut<NextState<GameState>>,
-    q_cleanup: Query<Entity, With<SessionEntity>>,
-    q_others: Query<Entity, Or<(With<AlienFactory>, With<AlienMachine>, With<EnergyOrb>)>>,
+    q_cleanup: Query<Entity, Or<(With<PlayerBall>, With<AlienFactory>, With<AlienMachine>, With<EnergyOrb>)>>,
     mut q_planet: Query<(&mut PlanetData, &Mesh3d), With<Planet>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut dash_state: ResMut<DashState>,
     mut score: ResMut<Score>,
-    mut session_time: ResMut<SessionTime>,
 ) {
-    for entity in q_cleanup.iter().chain(q_others.iter()) {
+    for entity in q_cleanup.iter() {
         commands.entity(entity).despawn_children();
         commands.entity(entity).despawn();
     }
@@ -972,10 +987,8 @@ fn world_reset_system(
     }
 
     *dash_state = DashState::default();
-    dash_state.current_energy = 100.0;
-    
     score.current = 0;
-    session_time.elapsed = 0.0;
+
     next_state.set(GameState::Playing);
 }
 
@@ -1055,5 +1068,102 @@ fn update_time_hud_system(
 ) {
     if let Ok(mut text) = q_text.single_mut() {
         text.0 = format!("TIME: {}", session_time.format());
+    }
+}
+
+fn setup_main_menu(mut commands: Commands, profile: Res<PlayerProfile>) {
+    commands.spawn((
+        MainMenuRoot,
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.9).into()),
+        ZIndex(200),
+    ))
+    .with_children(|parent| {
+        parent.spawn((
+            Text::new("GREEN SPHERE"),
+            TextFont { font_size: 80.0, ..default() },
+            TextColor(Color::srgb(0.0, 1.0, 0.5)),
+            Node { margin: UiRect::bottom(Val::VMin(5.0)), ..default() },
+        ));
+
+        parent.spawn((
+            Node {
+                width: Val::Px(300.0),
+                height: Val::Px(40.0),
+                align_items: AlignItems::Center,
+                padding: UiRect::left(Val::Px(10.0)),
+                margin: UiRect::bottom(Val::VMin(3.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.1, 0.1, 0.1).into()),
+            BorderRadius::all(Val::Px(5.0)),
+        )).with_children(|p| {
+            p.spawn((
+                Text::new(format!("USER: {}", profile.username)),
+                TextFont { font_size: 18.0, ..default() },
+                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+            ));
+        });
+
+        parent.spawn((
+            StartButton,
+            Interaction::default(),
+            Node {
+                width: Val::Px(250.0),
+                height: Val::Px(60.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                margin: UiRect::bottom(Val::Px(10.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.2, 0.2, 0.2).into()),
+            BorderRadius::all(Val::Px(10.0)),
+        )).with_children(|btn| {
+            btn.spawn((Text::new("START"), TextFont { font_size: 25.0, ..default() }, TextColor(Color::WHITE)));
+        });
+
+        parent.spawn((
+            ExitButton,
+            Interaction::default(),
+            Node {
+                width: Val::Px(250.0),
+                height: Val::Px(60.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.2, 0.1, 0.1).into()),
+            BorderRadius::all(Val::Px(10.0)),
+        )).with_children(|btn| {
+            btn.spawn((Text::new("EXIT"), TextFont { font_size: 25.0, ..default() }, TextColor(Color::WHITE)));
+        });
+    });
+}
+
+fn main_menu_system(
+    mut next_state: ResMut<NextState<GameState>>,
+    q_start: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
+    q_exit: Query<&Interaction, (Changed<Interaction>, With<ExitButton>)>,
+    mut exit_events: MessageWriter<AppExit>,
+) {
+    if let Ok(Interaction::Pressed) = q_start.single() {
+        next_state.set(GameState::Playing);
+    }
+    if let Ok(Interaction::Pressed) = q_exit.single() {
+        exit_events.write(AppExit::Success);
+    }
+}
+
+fn cleanup_main_menu(mut commands: Commands, q: Query<Entity, With<MainMenuRoot>>) {
+    if let Ok(e) = q.single() {
+        commands.entity(e).despawn();
     }
 }
