@@ -23,3 +23,6 @@ pub struct TimeHudText;
 
 #[derive(Component)]
 pub struct ScoreHud;
+
+#[derive(Component)]
+pub struct SessionUi;

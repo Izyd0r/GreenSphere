@@ -15,7 +15,7 @@ use crate::components::machine::AlienMachine;
 use crate::components::factory::{AlienFactory, FactorySpawner};
 use crate::resources::dash_settings::DashSettings;
 use crate::resources::dash_state::DashState;
-use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton, ScoreHudText, TimeHudText, ScoreHud};
+use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton, ScoreHudText, TimeHudText, ScoreHud, SessionUi};
 use crate::components::orbs::EnergyOrb;
 use crate::components::session::SessionEntity;
 use crate::resources::score::{Score, ScoreMessage};
@@ -686,7 +686,7 @@ fn player_health_sync_system(
 
 fn spawn_health_bar(mut commands: Commands) {
     commands.spawn((
-        SessionEntity,
+        SessionUi,
         Node {
             position_type: PositionType::Absolute,
             display: Display::Flex,
@@ -971,6 +971,7 @@ fn world_reset_system(
     mut meshes: ResMut<Assets<Mesh>>,
     mut dash_state: ResMut<DashState>,
     mut score: ResMut<Score>,
+    mut time: ResMut<SessionTime>,
 ) {
     for entity in q_cleanup.iter() {
         commands.entity(entity).despawn_children();
@@ -988,6 +989,7 @@ fn world_reset_system(
 
     *dash_state = DashState::default();
     score.current = 0;
+    time.elapsed = 0.0;
 
     next_state.set(GameState::Playing);
 }
@@ -1003,15 +1005,17 @@ fn score_event_handler(
 
 fn spawn_score_hud(mut commands: Commands) {
     commands.spawn((
-        ScoreHud,
-        SessionEntity,
+        ScoreHud, 
+        SessionUi,
         Node {
             position_type: PositionType::Absolute,
             top: Val::VMin(2.0),
             width: Val::Percent(100.0),
             display: Display::Flex,
+            flex_direction: FlexDirection::Row,
             justify_content: JustifyContent::Center,
-            column_gap: Val::VMin(5.0),
+            align_items: AlignItems::Center,
+            column_gap: Val::VMin(10.0),
             ..default()
         },
         ZIndex(100),
@@ -1046,7 +1050,7 @@ fn update_score_hud_system(
 
 fn cleanup_game_ui(
     mut commands: Commands,
-    q_ui: Query<Entity, Or<(With<VjoyBase>, With<DashButton>, With<HealthBarFill>, With<ScoreHudText>,)>>,
+    q_ui: Query<Entity, Or<(With<VjoyBase>, With<DashButton>, With<HealthBarFill>, With<ScoreHud>, With<DeathMenuRoot>, With<SessionUi>)>>,
 ) {
     for entity in q_ui.iter() {
         if let Ok(mut entity_cmds) = commands.get_entity(entity) {
