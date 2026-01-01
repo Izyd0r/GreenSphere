@@ -9,3 +9,4 @@ pub(super) mod machine;
 pub(super) mod dash;
 pub(super) mod ui;
 pub(super) mod orbs;
+pub(super) mod session;
