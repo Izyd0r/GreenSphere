@@ -8,3 +8,5 @@ pub(super) mod dash_state;
 pub(super) mod score;
 pub(super) mod session_time;
 pub(super) mod player_profile;
+pub(super) mod leaderboard;
+pub(super) mod reset_target;

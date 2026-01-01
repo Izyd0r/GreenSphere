@@ -15,7 +15,7 @@ use crate::components::machine::AlienMachine;
 use crate::components::factory::{AlienFactory, FactorySpawner};
 use crate::resources::dash_settings::DashSettings;
 use crate::resources::dash_state::DashState;
-use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton, ScoreHudText, TimeHudText, ScoreHud, SessionUi};
+use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton, ScoreHudText, TimeHudText, ScoreHud, SessionUi, MainMenuButton, ShowLeaderboardButton, LeaderboardPanel, CloseLeaderboardButton};
 use crate::components::orbs::EnergyOrb;
 use crate::components::session::SessionEntity;
 use crate::resources::score::{Score, ScoreMessage};
@@ -25,6 +25,8 @@ use crate::prelude::{
 };
 use crate::resources::session_time::SessionTime;
 use crate::resources::player_profile::PlayerProfile;
+use crate::resources::leaderboard::Leaderboard;
+use crate::resources::reset_target::ResetTarget;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default, Reflect)]
 pub enum GameState {
@@ -50,13 +52,16 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<Score>()
         .init_resource::<SessionTime>()
         .init_resource::<PlayerProfile>()
+        .init_resource::<ResetTarget>()
         .add_message::<ScoreMessage>()
         .register_type::<Score>()
         .register_type::<PlanetSettings>()
         .register_type::<EnemySettings>()
+        .init_resource::<Leaderboard>()
+        .register_type::<Leaderboard>()
         .add_systems(Startup, (setup_planet, build_adjacency).chain())
         .add_systems(OnEnter(GameState::MainMenu), setup_main_menu)
-        .add_systems(Update, main_menu_system.run_if(in_state(GameState::MainMenu)))
+        .add_systems(Update, (ui_button_hover_system, main_menu_system.run_if(in_state(GameState::MainMenu))))
         .add_systems(OnExit(GameState::MainMenu), cleanup_main_menu)
         .add_systems(OnEnter(GameState::Playing), (
             spawn_session_objects, 
@@ -907,6 +912,23 @@ fn setup_death_menu(mut commands: Commands, score: Res<Score>, time: Res<Session
         ));
 
         parent.spawn((
+            MainMenuButton,
+            Interaction::default(),
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(50.0),
+                margin: UiRect::bottom(Val::Px(10.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.1, 0.3, 0.1)),
+            BorderRadius::all(Val::Px(10.0)),
+        )).with_children(|btn| {
+            btn.spawn((Text::new("MAIN MENU"), TextColor(Color::WHITE)));
+        });
+
+        parent.spawn((
             RestartButton,
             Interaction::default(),
             Node {
@@ -943,11 +965,19 @@ fn setup_death_menu(mut commands: Commands, score: Res<Score>, time: Res<Session
 
 fn death_menu_interaction_system(
     mut next_state: ResMut<NextState<GameState>>,
+    mut reset_target: ResMut<ResetTarget>, 
     q_restart: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>,
     q_exit: Query<&Interaction, (Changed<Interaction>, With<ExitButton>)>,
+    q_menu: Query<&Interaction, (Changed<Interaction>, With<MainMenuButton>)>,
     mut app_exit_events: MessageWriter<AppExit>,
 ) {
     if let Ok(Interaction::Pressed) = q_restart.single() {
+        reset_target.0 = GameState::Playing; 
+        next_state.set(GameState::Resetting);
+    }
+
+    if let Ok(Interaction::Pressed) = q_menu.single() {
+        reset_target.0 = GameState::MainMenu;
         next_state.set(GameState::Resetting);
     }
 
@@ -966,6 +996,7 @@ fn cleanup_death_menu(mut commands: Commands, q_root: Query<Entity, With<DeathMe
 fn world_reset_system(
     mut commands: Commands,
     mut next_state: ResMut<NextState<GameState>>,
+    reset_target: Res<ResetTarget>,
     q_cleanup: Query<Entity, Or<(With<PlayerBall>, With<AlienFactory>, With<AlienMachine>, With<EnergyOrb>)>>,
     mut q_planet: Query<(&mut PlanetData, &Mesh3d), With<Planet>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -991,7 +1022,7 @@ fn world_reset_system(
     score.current = 0;
     time.elapsed = 0.0;
 
-    next_state.set(GameState::Playing);
+    next_state.set(reset_target.0.clone());
 }
 
 fn score_event_handler(
@@ -1075,79 +1106,103 @@ fn update_time_hud_system(
     }
 }
 
-fn setup_main_menu(mut commands: Commands, profile: Res<PlayerProfile>) {
+fn setup_main_menu(
+    mut commands: Commands, 
+    leaderboard: Res<Leaderboard>
+) {
     commands.spawn((
         MainMenuRoot,
         Node {
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
             display: Display::Flex,
-            flex_direction: FlexDirection::Column,
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
             ..default()
         },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.9).into()),
         ZIndex(200),
     ))
     .with_children(|parent| {
-        parent.spawn((
-            Text::new("GREEN SPHERE"),
-            TextFont { font_size: 80.0, ..default() },
-            TextColor(Color::srgb(0.0, 1.0, 0.5)),
-            Node { margin: UiRect::bottom(Val::VMin(5.0)), ..default() },
-        ));
-
-        parent.spawn((
-            Node {
-                width: Val::Px(300.0),
-                height: Val::Px(40.0),
-                align_items: AlignItems::Center,
-                padding: UiRect::left(Val::Px(10.0)),
-                margin: UiRect::bottom(Val::VMin(3.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.1, 0.1, 0.1).into()),
-            BorderRadius::all(Val::Px(5.0)),
-        )).with_children(|p| {
-            p.spawn((
-                Text::new(format!("USER: {}", profile.username)),
-                TextFont { font_size: 18.0, ..default() },
-                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+        parent.spawn(Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(15.0),
+            ..default()
+        })
+        .with_children(|menu| {
+            menu.spawn((
+                Text::new("GREEN SPHERE"),
+                TextFont { font_size: 80.0, ..default() },
+                TextColor(Color::srgb(0.0, 1.0, 0.5)),
+                Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() },
             ));
+
+            spawn_menu_button(menu, StartButton, "START MISSION", Color::srgb(0.2, 0.2, 0.2));
+            spawn_menu_button(menu, ShowLeaderboardButton, "LEADERBOARD", Color::srgb(0.2, 0.2, 0.4));
+            spawn_menu_button(menu, ExitButton, "EXIT", Color::srgb(0.2, 0.1, 0.1));
         });
 
         parent.spawn((
-            StartButton,
-            Interaction::default(),
+            LeaderboardPanel,
             Node {
-                width: Val::Px(250.0),
-                height: Val::Px(60.0),
-                justify_content: JustifyContent::Center,
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                display: Display::Flex,
                 align_items: AlignItems::Center,
-                margin: UiRect::bottom(Val::Px(10.0)),
+                justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.2, 0.2, 0.2).into()),
-            BorderRadius::all(Val::Px(10.0)),
-        )).with_children(|btn| {
-            btn.spawn((Text::new("START"), TextFont { font_size: 25.0, ..default() }, TextColor(Color::WHITE)));
-        });
+            Visibility::Hidden,
+        ))
+        .with_children(|overlay| {
+            overlay.spawn((
+                Node {
+                    width: Val::Px(450.0),
+                    padding: UiRect::all(Val::Px(30.0)),
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(10.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.1, 0.1, 0.1)),
+                BorderRadius::all(Val::Px(15.0)),
+            ))
+            .with_children(|box_node| {
+                box_node.spawn((
+                    Text::new("TOP PLAYERS"),
+                    TextFont { font_size: 32.0, ..default() },
+                    TextColor(Color::WHITE),
+                    Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() },
+                ));
 
-        parent.spawn((
-            ExitButton,
-            Interaction::default(),
-            Node {
-                width: Val::Px(250.0),
-                height: Val::Px(60.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.2, 0.1, 0.1).into()),
-            BorderRadius::all(Val::Px(10.0)),
-        )).with_children(|btn| {
-            btn.spawn((Text::new("EXIT"), TextFont { font_size: 25.0, ..default() }, TextColor(Color::WHITE)));
+                box_node.spawn(Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    width: Val::Percent(100.0),
+                    margin: UiRect::bottom(Val::Px(30.0)),
+                    ..default()
+                })
+                .with_children(|list| {
+                    for (name, score) in &leaderboard.entries {
+                        list.spawn(Node {
+                            display: Display::Flex,
+                            justify_content: JustifyContent::SpaceBetween,
+                            width: Val::Percent(100.0),
+                            margin: UiRect::vertical(Val::Px(5.0)),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((Text::new(name.clone()), TextFont { font_size: 20.0, ..default() }, TextColor(Color::WHITE)));
+                            row.spawn((Text::new(score.to_string()), TextFont { font_size: 20.0, ..default() }, TextColor(Color::srgb(0.0, 1.0, 0.5))));
+                        });
+                    }
+                });
+
+                spawn_menu_button(box_node, CloseLeaderboardButton, "BACK", Color::srgb(0.3, 0.3, 0.3));
+            });
         });
     });
 }
@@ -1156,11 +1211,27 @@ fn main_menu_system(
     mut next_state: ResMut<NextState<GameState>>,
     q_start: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
     q_exit: Query<&Interaction, (Changed<Interaction>, With<ExitButton>)>,
+    q_lb_show: Query<&Interaction, (Changed<Interaction>, With<ShowLeaderboardButton>)>,
+    q_lb_close: Query<&Interaction, (Changed<Interaction>, With<CloseLeaderboardButton>)>,
+    mut q_panel: Query<&mut Visibility, With<LeaderboardPanel>>,
     mut exit_events: MessageWriter<AppExit>,
 ) {
     if let Ok(Interaction::Pressed) = q_start.single() {
         next_state.set(GameState::Playing);
     }
+
+    if let Ok(Interaction::Pressed) = q_lb_show.single() {
+        if let Ok(mut vis) = q_panel.single_mut() {
+            *vis = Visibility::Inherited;
+        }
+    }
+
+    if let Ok(Interaction::Pressed) = q_lb_close.single() {
+        if let Ok(mut vis) = q_panel.single_mut() {
+            *vis = Visibility::Hidden;
+        }
+    }
+
     if let Ok(Interaction::Pressed) = q_exit.single() {
         exit_events.write(AppExit::Success);
     }
@@ -1170,4 +1241,45 @@ fn cleanup_main_menu(mut commands: Commands, q: Query<Entity, With<MainMenuRoot>
     if let Ok(e) = q.single() {
         commands.entity(e).despawn();
     }
+}
+
+fn ui_button_hover_system(
+    mut q_buttons: Query<(&Interaction, &mut BackgroundColor), (With<Button>, Changed<Interaction>)>,
+) {
+    for (interaction, mut bg) in q_buttons.iter_mut() {
+        match *interaction {
+            Interaction::Hovered => bg.0 = Color::srgb(0.3, 0.3, 0.3),
+            Interaction::None => bg.0 = Color::srgb(0.2, 0.2, 0.2),
+            _ => {}
+        }
+    }
+}
+
+fn spawn_menu_button<T: Component>(
+    parent: &mut ChildSpawnerCommands, 
+    marker: T, 
+    label: &str, 
+    color: Color
+) {
+    parent.spawn((
+        Button,
+        marker,
+        Interaction::default(),
+        Node {
+            width: Val::Px(250.0),
+            height: Val::Px(60.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(color),
+        BorderRadius::all(Val::Px(10.0)),
+    ))
+    .with_children(|btn| {
+        btn.spawn((
+            Text::new(label),
+            TextFont { font_size: 25.0, ..default() },
+            TextColor(Color::WHITE),
+        ));
+    });
 }
