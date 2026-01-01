@@ -3,6 +3,7 @@ use bevy::platform::collections::HashSet;
 
 use rand::Rng;
 
+use crate::prelude::session_time;
 use crate::resources::vjoy_output::VjoyOutput;
 use crate::resources::planet_settings::PlanetSettings;
 use crate::components::planet::{Planet, PlanetData, TileState};
@@ -14,7 +15,7 @@ use crate::components::machine::AlienMachine;
 use crate::components::factory::{AlienFactory, FactorySpawner};
 use crate::resources::dash_settings::DashSettings;
 use crate::resources::dash_state::DashState;
-use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton, ScoreHudText};
+use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton, ScoreHudText, TimeHudText, ScoreHud};
 use crate::components::orbs::EnergyOrb;
 use crate::components::session::SessionEntity;
 use crate::resources::score::{Score, ScoreMessage};
@@ -22,6 +23,7 @@ use crate::prelude::{
     vjoy_base::VjoyBase, 
     dash::DashButton,
 };
+use crate::resources::session_time::SessionTime;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default, Reflect)]
 pub enum GameState {
@@ -37,6 +39,7 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<PlanetSettings>()
         .init_resource::<EnemySettings>()
         .init_resource::<Score>()
+        .init_resource::<SessionTime>()
         .add_message::<ScoreMessage>()
         .register_type::<Score>()
         .register_type::<PlanetSettings>()
@@ -63,7 +66,9 @@ pub(crate) fn plugin(app: &mut App) {
 
             (player_invincibility_system),
             
-            (score_event_handler, update_score_hud_system)
+            (score_event_handler, update_score_hud_system),
+
+            (track_session_time_system, update_time_hud_system)
         ).run_if(in_state(GameState::Playing)).run_if(any_with_component::<PlayerBall>))
         .add_systems(OnEnter(GameState::GameOver), (setup_death_menu, cleanup_game_ui))
         .add_systems(Update, death_menu_interaction_system.run_if(in_state(GameState::GameOver)))
@@ -847,7 +852,7 @@ fn death_system(
     }
 }
 
-fn setup_death_menu(mut commands: Commands, score: Res<Score>) {
+fn setup_death_menu(mut commands: Commands, score: Res<Score>, time: Res<SessionTime>) {
     commands.spawn((
         DeathMenuRoot,
         Node {
@@ -873,6 +878,13 @@ fn setup_death_menu(mut commands: Commands, score: Res<Score>) {
         parent.spawn((
             Text::new(format!("FINAL SCORE: {}", score.current)),
             TextFont { font_size: 32.0, ..default() },
+            TextColor(Color::WHITE),
+            Node { margin: UiRect::bottom(Val::Px(40.0)), ..default() },
+        ));
+
+        parent.spawn((
+            Text::new(format!("SURVIVED FOR: {}", time.format())),
+            TextFont { font_size: 28.0, ..default() },
             TextColor(Color::WHITE),
             Node { margin: UiRect::bottom(Val::Px(40.0)), ..default() },
         ));
@@ -943,6 +955,7 @@ fn world_reset_system(
     mut meshes: ResMut<Assets<Mesh>>,
     mut dash_state: ResMut<DashState>,
     mut score: ResMut<Score>,
+    mut session_time: ResMut<SessionTime>,
 ) {
     for entity in q_cleanup.iter().chain(q_others.iter()) {
         commands.entity(entity).despawn_children();
@@ -962,6 +975,7 @@ fn world_reset_system(
     dash_state.current_energy = 100.0;
     
     score.current = 0;
+    session_time.elapsed = 0.0;
     next_state.set(GameState::Playing);
 }
 
@@ -976,19 +990,34 @@ fn score_event_handler(
 
 fn spawn_score_hud(mut commands: Commands) {
     commands.spawn((
-        ScoreHudText,
+        ScoreHud,
+        SessionEntity,
         Node {
             position_type: PositionType::Absolute,
-            top: Val::VMin(5.0),
-            left: Val::Percent(50.0),
-            margin: UiRect::left(Val::VMin(-10.0)),
+            top: Val::VMin(2.0),
+            width: Val::Percent(100.0),
+            display: Display::Flex,
+            justify_content: JustifyContent::Center,
+            column_gap: Val::VMin(5.0),
             ..default()
         },
-        Text::new("SCORE: 0"),
-        TextFont { font_size: 30.0, ..default() },
-        TextColor(Color::WHITE),
         ZIndex(100),
-    ));
+    ))
+    .with_children(|parent| {
+        parent.spawn((
+            ScoreHudText,
+            Text::new("SCORE: 0"),
+            TextFont { font_size: 24.0, ..default() },
+            TextColor(Color::WHITE),
+        ));
+
+        parent.spawn((
+            TimeHudText,
+            Text::new("TIME: 00:00"),
+            TextFont { font_size: 24.0, ..default() },
+            TextColor(Color::srgb(0.8, 0.8, 1.0)),
+        ));
+    });
 }
 
 fn update_score_hud_system(
@@ -1010,5 +1039,21 @@ fn cleanup_game_ui(
         if let Ok(mut entity_cmds) = commands.get_entity(entity) {
             entity_cmds.despawn();
         }
+    }
+}
+
+fn track_session_time_system(
+    time: Res<Time>,
+    mut session_time: ResMut<SessionTime>,
+) {
+    session_time.elapsed += time.delta_secs();
+}
+
+fn update_time_hud_system(
+    session_time: Res<SessionTime>,
+    mut q_text: Query<&mut Text, With<TimeHudText>>,
+) {
+    if let Ok(mut text) = q_text.single_mut() {
+        text.0 = format!("TIME: {}", session_time.format());
     }
 }
