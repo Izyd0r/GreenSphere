@@ -14,11 +14,19 @@ use crate::components::machine::AlienMachine;
 use crate::components::factory::{AlienFactory, FactorySpawner};
 use crate::resources::dash_settings::DashSettings;
 use crate::resources::dash_state::DashState;
-use crate::components::ui::{HealthBarFill, HealthText};
+use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton};
 use crate::components::orbs::EnergyOrb;
+
+#[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default, Reflect)]
+pub enum GameState {
+    #[default]
+    Playing,
+    GameOver,
+}
 
 pub(crate) fn plugin(app: &mut App) {
     app
+        .init_state::<GameState>()
         .init_resource::<PlanetSettings>()
         .init_resource::<EnemySettings>()
         .register_type::<PlanetSettings>()
@@ -40,7 +48,11 @@ pub(crate) fn plugin(app: &mut App) {
             orb_collection_system,
             orb_animation_system,
             sync_visuals,
-        ).chain());
+            death_system,
+        ).chain().run_if(in_state(GameState::Playing)))
+        .add_systems(OnEnter(GameState::GameOver), setup_death_menu)
+        .add_systems(Update, death_menu_interaction_system.run_if(in_state(GameState::GameOver)))
+        .add_systems(OnExit(GameState::GameOver), cleanup_death_menu);
 }
 
 fn setup_game(
@@ -782,5 +794,109 @@ fn orb_animation_system(
         let offset = (t * 2.0).sin() * 0.5;
         let normal = transform.translation.normalize();
         transform.translation += normal * offset * 0.1;
+    }
+}
+
+fn death_system(
+    mut next_state: ResMut<NextState<GameState>>,
+    q_player: Query<&PlayerBall>,
+) {
+    let Ok(player) = q_player.single() else { return; };
+
+    if player.hp <= 0.0 {
+        next_state.set(GameState::GameOver);
+    }
+}
+
+fn setup_death_menu(mut commands: Commands) {
+    commands.spawn((
+        DeathMenuRoot,
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85).into()),
+        ZIndex(200),
+    ))
+    .with_children(|parent| {
+        parent.spawn((
+            Text::new("GAME OVER!"),
+            TextFont { font_size: 80.0, ..default() },
+            TextColor(Color::srgb(1.0, 0.2, 0.2)),
+            Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() },
+        ));
+
+        parent.spawn((
+            Text::new("SCORE: 00000 | TIME: 00:00"),
+            TextFont { font_size: 24.0, ..default() },
+            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+            Node { margin: UiRect::bottom(Val::Px(40.0)), ..default() },
+        ));
+
+        parent.spawn((
+            RestartButton,
+            Interaction::default(),
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(50.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                margin: UiRect::bottom(Val::Px(10.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.15, 0.15, 0.15).into()),
+            BorderRadius::all(Val::Px(10.0)),
+        )).with_children(|btn| {
+            btn.spawn((Text::new("RESTART"), TextFont { font_size: 20.0, ..default() }, TextColor(Color::WHITE)));
+        });
+
+        parent.spawn((
+            ExitButton,
+            Interaction::default(),
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(50.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.15, 0.15, 0.15).into()),
+            BorderRadius::all(Val::Px(10.0)),
+        )).with_children(|btn| {
+            btn.spawn((Text::new("EXIT"), TextFont { font_size: 20.0, ..default() }, TextColor(Color::WHITE)));
+        });
+    });
+}
+
+fn death_menu_interaction_system(
+    mut next_state: ResMut<NextState<GameState>>,
+    mut q_player: Query<&mut PlayerBall>,
+    q_restart: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>,
+    q_exit: Query<&Interaction, (Changed<Interaction>, With<ExitButton>)>,
+    mut app_exit_events: MessageWriter<AppExit>,
+) {
+    // Handle Restart
+    if let Ok(Interaction::Pressed) = q_restart.single() {
+        // TODO: Add world reset
+        if let Ok(mut player) = q_player.single_mut() {
+            player.hp = 100.0;
+        }
+        next_state.set(GameState::Playing);
+    }
+
+    if let Ok(Interaction::Pressed) = q_exit.single() {
+        app_exit_events.write(AppExit::Success);
+    }
+}
+
+fn cleanup_death_menu(mut commands: Commands, q_root: Query<Entity, With<DeathMenuRoot>>) {
+    if let Ok(entity) = q_root.single() {
+        commands.entity(entity).despawn_children();
+        commands.entity(entity).despawn();
     }
 }
