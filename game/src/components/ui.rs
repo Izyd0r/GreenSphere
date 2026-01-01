@@ -14,3 +14,12 @@ pub struct RestartButton;
 
 #[derive(Component)]
 pub struct ExitButton;
+
+#[derive(Component)]
+pub struct ScoreHudText;
+
+#[derive(Component)]
+pub struct TimeHudText;
+
+#[derive(Component)]
+pub struct ScoreHud;

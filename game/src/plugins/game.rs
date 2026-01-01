@@ -3,6 +3,7 @@ use bevy::platform::collections::HashSet;
 
 use rand::Rng;
 
+use crate::prelude::session_time;
 use crate::resources::vjoy_output::VjoyOutput;
 use crate::resources::planet_settings::PlanetSettings;
 use crate::components::planet::{Planet, PlanetData, TileState};
@@ -14,9 +15,15 @@ use crate::components::machine::AlienMachine;
 use crate::components::factory::{AlienFactory, FactorySpawner};
 use crate::resources::dash_settings::DashSettings;
 use crate::resources::dash_state::DashState;
-use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton};
+use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton, ScoreHudText, TimeHudText, ScoreHud};
 use crate::components::orbs::EnergyOrb;
 use crate::components::session::SessionEntity;
+use crate::resources::score::{Score, ScoreMessage};
+use crate::prelude::{
+    vjoy_base::VjoyBase, 
+    dash::DashButton,
+};
+use crate::resources::session_time::SessionTime;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default, Reflect)]
 pub enum GameState {
@@ -31,13 +38,20 @@ pub(crate) fn plugin(app: &mut App) {
         .init_state::<GameState>()
         .init_resource::<PlanetSettings>()
         .init_resource::<EnemySettings>()
+        .init_resource::<Score>()
+        .init_resource::<SessionTime>()
+        .add_message::<ScoreMessage>()
+        .register_type::<Score>()
         .register_type::<PlanetSettings>()
         .register_type::<EnemySettings>()
         .add_systems(Startup, (setup_planet, build_adjacency).chain())
         .add_systems(OnEnter(GameState::Playing), (
             spawn_session_objects, 
-            spawn_factories, 
-            spawn_health_bar
+            spawn_factories,
+            crate::plugins::vjoy::spawn_joystick,    
+            crate::plugins::vjoy::spawn_dash_button,
+            spawn_health_bar,
+            spawn_score_hud,
         ).chain())        
         .add_systems(Update, (
             (planetary_control_system, sync_visuals).chain(),
@@ -52,8 +66,11 @@ pub(crate) fn plugin(app: &mut App) {
 
             (player_invincibility_system),
             
+            (score_event_handler, update_score_hud_system),
+
+            (track_session_time_system, update_time_hud_system)
         ).run_if(in_state(GameState::Playing)).run_if(any_with_component::<PlayerBall>))
-        .add_systems(OnEnter(GameState::GameOver), setup_death_menu)
+        .add_systems(OnEnter(GameState::GameOver), (setup_death_menu, cleanup_game_ui))
         .add_systems(Update, death_menu_interaction_system.run_if(in_state(GameState::GameOver)))
         .add_systems(OnExit(GameState::GameOver), cleanup_death_menu)
         .add_systems(OnEnter(GameState::Resetting), world_reset_system);
@@ -235,6 +252,7 @@ fn tile_restoration_system(
     q_player: Query<&GlobalTransform, With<PlayerBall>>,
     mut q_planet: Query<(&Transform, &Mesh3d, &mut PlanetData), With<Planet>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut score_msg: MessageWriter<ScoreMessage>
 ) {
     let Ok(player_gtrans) = q_player.single() else { return; };
     let Ok((planet_trans, mesh_handle, mut planet_data)) = q_planet.single_mut() else { return; };
@@ -257,8 +275,17 @@ fn tile_restoration_system(
             if (v.x - local_player_pos.x).abs() > brush_size { continue; }
             
             if v.distance_squared(local_player_pos) < brush_sq {
-                planet_data.vertex_states[i] = TileState::Healthy;
-                v_col[i] = [0.0, 1.0, 0.4, 1.0];
+                let points = match planet_data.vertex_states[i] {
+                    TileState::Wasteland => 100,
+                    TileState::Polluted => 200,
+                    _ => 0,
+                };
+
+                if points > 0 {
+                    planet_data.vertex_states[i] = TileState::Healthy;
+                    v_col[i] = [0.0, 1.0, 0.4, 1.0];
+                    score_msg.write(ScoreMessage(points));
+                }
             }
         }
     }
@@ -598,6 +625,7 @@ fn enemy_collision_system(
     mut q_player: Query<(&GlobalTransform, &mut PlayerBall)>,
     q_machines: Query<(Entity, &GlobalTransform), With<AlienMachine>>,
     q_factories: Query<(Entity, &GlobalTransform), With<AlienFactory>>,
+    mut score_msg: MessageWriter<ScoreMessage>,
 ) {
     let Ok((player_gtrans, mut player)) = q_player.single_mut() else { return; };
     let player_pos = player_gtrans.translation();
@@ -608,6 +636,7 @@ fn enemy_collision_system(
             if dash_state.is_active {
                 commands.entity(entity).despawn_children();
                 commands.entity(entity).despawn();
+                score_msg.write(ScoreMessage(300));
             } else if !settings.god_mode && player.invincibility_timer <= 0.0 {
                 player.hp = (player.hp - 25.0).max(0.0);
                 player.invincibility_timer = 5.0; 
@@ -622,6 +651,7 @@ fn enemy_collision_system(
             if player_pos.distance(factory_gtrans.translation()) < player_radius + 6.0 {
                 commands.entity(entity).despawn_children();
                 commands.entity(entity).despawn();
+                score_msg.write(ScoreMessage(500));
             }
         }
     }
@@ -822,7 +852,7 @@ fn death_system(
     }
 }
 
-fn setup_death_menu(mut commands: Commands) {
+fn setup_death_menu(mut commands: Commands, score: Res<Score>, time: Res<SessionTime>) {
     commands.spawn((
         DeathMenuRoot,
         Node {
@@ -834,7 +864,7 @@ fn setup_death_menu(mut commands: Commands) {
             justify_content: JustifyContent::Center,
             ..default()
         },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85).into()),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
         ZIndex(200),
     ))
     .with_children(|parent| {
@@ -846,9 +876,16 @@ fn setup_death_menu(mut commands: Commands) {
         ));
 
         parent.spawn((
-            Text::new("SCORE: 00000 | TIME: 00:00"),
-            TextFont { font_size: 24.0, ..default() },
-            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+            Text::new(format!("FINAL SCORE: {}", score.current)),
+            TextFont { font_size: 32.0, ..default() },
+            TextColor(Color::WHITE),
+            Node { margin: UiRect::bottom(Val::Px(40.0)), ..default() },
+        ));
+
+        parent.spawn((
+            Text::new(format!("SURVIVED FOR: {}", time.format())),
+            TextFont { font_size: 28.0, ..default() },
+            TextColor(Color::WHITE),
             Node { margin: UiRect::bottom(Val::Px(40.0)), ..default() },
         ));
 
@@ -863,7 +900,7 @@ fn setup_death_menu(mut commands: Commands) {
                 margin: UiRect::bottom(Val::Px(10.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.15, 0.15, 0.15).into()),
+            BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
             BorderRadius::all(Val::Px(10.0)),
         )).with_children(|btn| {
             btn.spawn((Text::new("RESTART"), TextFont { font_size: 20.0, ..default() }, TextColor(Color::WHITE)));
@@ -879,7 +916,7 @@ fn setup_death_menu(mut commands: Commands) {
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.15, 0.15, 0.15).into()),
+            BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
             BorderRadius::all(Val::Px(10.0)),
         )).with_children(|btn| {
             btn.spawn((Text::new("EXIT"), TextFont { font_size: 20.0, ..default() }, TextColor(Color::WHITE)));
@@ -917,6 +954,8 @@ fn world_reset_system(
     mut q_planet: Query<(&mut PlanetData, &Mesh3d), With<Planet>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut dash_state: ResMut<DashState>,
+    mut score: ResMut<Score>,
+    mut session_time: ResMut<SessionTime>,
 ) {
     for entity in q_cleanup.iter().chain(q_others.iter()) {
         commands.entity(entity).despawn_children();
@@ -935,5 +974,86 @@ fn world_reset_system(
     *dash_state = DashState::default();
     dash_state.current_energy = 100.0;
     
+    score.current = 0;
+    session_time.elapsed = 0.0;
     next_state.set(GameState::Playing);
+}
+
+fn score_event_handler(
+    mut messages: MessageReader<ScoreMessage>,
+    mut score: ResMut<Score>,
+) {
+    for msg in messages.read() {
+        score.current += msg.0;
+    }
+}
+
+fn spawn_score_hud(mut commands: Commands) {
+    commands.spawn((
+        ScoreHud,
+        SessionEntity,
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::VMin(2.0),
+            width: Val::Percent(100.0),
+            display: Display::Flex,
+            justify_content: JustifyContent::Center,
+            column_gap: Val::VMin(5.0),
+            ..default()
+        },
+        ZIndex(100),
+    ))
+    .with_children(|parent| {
+        parent.spawn((
+            ScoreHudText,
+            Text::new("SCORE: 0"),
+            TextFont { font_size: 24.0, ..default() },
+            TextColor(Color::WHITE),
+        ));
+
+        parent.spawn((
+            TimeHudText,
+            Text::new("TIME: 00:00"),
+            TextFont { font_size: 24.0, ..default() },
+            TextColor(Color::srgb(0.8, 0.8, 1.0)),
+        ));
+    });
+}
+
+fn update_score_hud_system(
+    score: Res<Score>,
+    mut q_text: Query<&mut Text, With<ScoreHudText>>,
+) {
+    if score.is_changed() {
+        if let Ok(mut text) = q_text.single_mut() {
+            text.0 = format!("SCORE: {}", score.current);
+        }
+    }
+}
+
+fn cleanup_game_ui(
+    mut commands: Commands,
+    q_ui: Query<Entity, Or<(With<VjoyBase>, With<DashButton>, With<HealthBarFill>, With<ScoreHudText>,)>>,
+) {
+    for entity in q_ui.iter() {
+        if let Ok(mut entity_cmds) = commands.get_entity(entity) {
+            entity_cmds.despawn();
+        }
+    }
+}
+
+fn track_session_time_system(
+    time: Res<Time>,
+    mut session_time: ResMut<SessionTime>,
+) {
+    session_time.elapsed += time.delta_secs();
+}
+
+fn update_time_hud_system(
+    session_time: Res<SessionTime>,
+    mut q_text: Query<&mut Text, With<TimeHudText>>,
+) {
+    if let Ok(mut text) = q_text.single_mut() {
+        text.0 = format!("TIME: {}", session_time.format());
+    }
 }
