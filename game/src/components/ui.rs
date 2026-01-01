@@ -5,3 +5,12 @@ pub struct HealthBarFill;
 
 #[derive(Component)]
 pub struct HealthText;
+
+#[derive(Component)]
+pub struct DeathMenuRoot;
+
+#[derive(Component)]
+pub struct RestartButton;
+
+#[derive(Component)]
+pub struct ExitButton;

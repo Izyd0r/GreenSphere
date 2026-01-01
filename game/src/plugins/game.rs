@@ -14,36 +14,52 @@ use crate::components::machine::AlienMachine;
 use crate::components::factory::{AlienFactory, FactorySpawner};
 use crate::resources::dash_settings::DashSettings;
 use crate::resources::dash_state::DashState;
-use crate::components::ui::{HealthBarFill, HealthText};
+use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton};
 use crate::components::orbs::EnergyOrb;
+use crate::components::session::SessionEntity;
+
+#[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default, Reflect)]
+pub enum GameState {
+    #[default]
+    Resetting,
+    GameOver,
+    Playing,
+}
 
 pub(crate) fn plugin(app: &mut App) {
     app
+        .init_state::<GameState>()
         .init_resource::<PlanetSettings>()
         .init_resource::<EnemySettings>()
         .register_type::<PlanetSettings>()
         .register_type::<EnemySettings>()
-        .add_systems(Startup, setup_game)
-        .add_systems(PostStartup, (build_adjacency, spawn_factories, spawn_health_bar).chain())        
+        .add_systems(Startup, (setup_planet, build_adjacency).chain())
+        .add_systems(OnEnter(GameState::Playing), (
+            spawn_session_objects, 
+            spawn_factories, 
+            spawn_health_bar
+        ).chain())        
         .add_systems(Update, (
-            planetary_control_system,
-            tile_restoration_system,
-            factory_spawner_system,
-            alien_ai_system,
-            billboard_system, 
-            pollution_lifecycle_system,
-            enemy_collision_system,
-            player_health_sync_system,
-            update_health_bar_system,
-            player_invincibility_system,
-            orb_spawning_system,
-            orb_collection_system,
-            orb_animation_system,
-            sync_visuals,
-        ).chain());
+            (planetary_control_system, sync_visuals).chain(),
+            
+            (tile_restoration_system, pollution_lifecycle_system),
+            
+            (factory_spawner_system, alien_ai_system, enemy_collision_system, billboard_system),
+            
+            (player_health_sync_system, update_health_bar_system, death_system).chain(),
+            
+            (orb_spawning_system, orb_collection_system, orb_animation_system),
+
+            (player_invincibility_system),
+            
+        ).run_if(in_state(GameState::Playing)).run_if(any_with_component::<PlayerBall>))
+        .add_systems(OnEnter(GameState::GameOver), setup_death_menu)
+        .add_systems(Update, death_menu_interaction_system.run_if(in_state(GameState::GameOver)))
+        .add_systems(OnExit(GameState::GameOver), cleanup_death_menu)
+        .add_systems(OnEnter(GameState::Resetting), world_reset_system);
 }
 
-fn setup_game(
+fn setup_planet(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -59,7 +75,7 @@ fn setup_game(
     mesh.compute_flat_normals();
     let vertex_count = mesh.count_vertices();
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.15, 0.15, 0.15, 1.0]; vertex_count]);
-    mesh.asset_usage = bevy::asset::RenderAssetUsages::RENDER_WORLD | bevy::asset::RenderAssetUsages::MAIN_WORLD;
+    mesh.asset_usage = bevy::asset::RenderAssetUsages::default();
 
     commands.spawn((
         Planet,
@@ -71,15 +87,24 @@ fn setup_game(
         MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::WHITE, ..default() })),
         Transform::from_scale(Vec3::splat(settings.radius)),
     ));
+}
 
+fn spawn_session_objects(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    settings: Res<PlanetSettings>,
+) {
     commands.spawn((
         PlanetPivot,
+        SessionEntity,
         Transform::IDENTITY,
-        Visibility::default(),
+        Visibility::Inherited,
+        InheritedVisibility::default(),
     ))
     .with_children(|parent| {
         parent.spawn((
-            PlayerBall { current_velocity: Vec3::ZERO, hp: 50.0, invincibility_timer: 0.0 }, 
+            PlayerBall { current_velocity: Vec3::ZERO, hp: 100.0, invincibility_timer: 0.0 }, 
             Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(5).unwrap())),
             MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.0, 1.0, 0.5), ..default() })),
             Transform::from_xyz(0.0, settings.radius + settings.player_radius, 0.0)
@@ -614,6 +639,7 @@ fn player_health_sync_system(
 
 fn spawn_health_bar(mut commands: Commands) {
     commands.spawn((
+        SessionEntity,
         Node {
             position_type: PositionType::Absolute,
             display: Display::Flex,
@@ -783,4 +809,131 @@ fn orb_animation_system(
         let normal = transform.translation.normalize();
         transform.translation += normal * offset * 0.1;
     }
+}
+
+fn death_system(
+    mut next_state: ResMut<NextState<GameState>>,
+    q_player: Query<&PlayerBall>,
+) {
+    let Ok(player) = q_player.single() else { return; };
+
+    if player.hp <= 0.0 {
+        next_state.set(GameState::GameOver);
+    }
+}
+
+fn setup_death_menu(mut commands: Commands) {
+    commands.spawn((
+        DeathMenuRoot,
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85).into()),
+        ZIndex(200),
+    ))
+    .with_children(|parent| {
+        parent.spawn((
+            Text::new("GAME OVER!"),
+            TextFont { font_size: 80.0, ..default() },
+            TextColor(Color::srgb(1.0, 0.2, 0.2)),
+            Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() },
+        ));
+
+        parent.spawn((
+            Text::new("SCORE: 00000 | TIME: 00:00"),
+            TextFont { font_size: 24.0, ..default() },
+            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+            Node { margin: UiRect::bottom(Val::Px(40.0)), ..default() },
+        ));
+
+        parent.spawn((
+            RestartButton,
+            Interaction::default(),
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(50.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                margin: UiRect::bottom(Val::Px(10.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.15, 0.15, 0.15).into()),
+            BorderRadius::all(Val::Px(10.0)),
+        )).with_children(|btn| {
+            btn.spawn((Text::new("RESTART"), TextFont { font_size: 20.0, ..default() }, TextColor(Color::WHITE)));
+        });
+
+        parent.spawn((
+            ExitButton,
+            Interaction::default(),
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(50.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.15, 0.15, 0.15).into()),
+            BorderRadius::all(Val::Px(10.0)),
+        )).with_children(|btn| {
+            btn.spawn((Text::new("EXIT"), TextFont { font_size: 20.0, ..default() }, TextColor(Color::WHITE)));
+        });
+    });
+}
+
+fn death_menu_interaction_system(
+    mut next_state: ResMut<NextState<GameState>>,
+    q_restart: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>,
+    q_exit: Query<&Interaction, (Changed<Interaction>, With<ExitButton>)>,
+    mut app_exit_events: MessageWriter<AppExit>,
+) {
+    if let Ok(Interaction::Pressed) = q_restart.single() {
+        next_state.set(GameState::Resetting);
+    }
+
+    if let Ok(Interaction::Pressed) = q_exit.single() {
+        app_exit_events.write(AppExit::Success);
+    }
+}
+
+fn cleanup_death_menu(mut commands: Commands, q_root: Query<Entity, With<DeathMenuRoot>>) {
+    if let Ok(entity) = q_root.single() {
+        commands.entity(entity).despawn_children();
+        commands.entity(entity).despawn();
+    }
+}
+
+fn world_reset_system(
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<GameState>>,
+    q_cleanup: Query<Entity, With<SessionEntity>>,
+    q_others: Query<Entity, Or<(With<AlienFactory>, With<AlienMachine>, With<EnergyOrb>)>>,
+    mut q_planet: Query<(&mut PlanetData, &Mesh3d), With<Planet>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut dash_state: ResMut<DashState>,
+) {
+    for entity in q_cleanup.iter().chain(q_others.iter()) {
+        commands.entity(entity).despawn_children();
+        commands.entity(entity).despawn();
+    }
+
+    if let Ok((mut planet_data, mesh_handle)) = q_planet.single_mut() {
+        planet_data.vertex_states.fill(TileState::Wasteland);
+        if let Some(mesh) = meshes.get_mut(mesh_handle) {
+            if let Some(bevy::mesh::VertexAttributeValues::Float32x4(v_col)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
+                v_col.fill([0.15, 0.15, 0.15, 1.0]);
+            }
+        }
+    }
+
+    *dash_state = DashState::default();
+    dash_state.current_energy = 100.0;
+    
+    next_state.set(GameState::Playing);
 }
