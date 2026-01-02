@@ -1154,6 +1154,8 @@ fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
                 justify_content: JustifyContent::Center,
                 ..default()
             },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+            ZIndex(10),
             Visibility::Hidden,
         ))
         .with_children(|overlay| {
@@ -1243,24 +1245,32 @@ fn main_menu_system(
     mut q_panel: Query<&mut Visibility, With<LeaderboardPanel>>,
     mut exit_events: MessageWriter<AppExit>,
 ) {
-    if let Ok(Interaction::Pressed) = q_start.single() {
-        next_state.set(GameState::Playing);
-    }
+    let Ok(panel_visibility) = q_panel.single() else { return; };
+    
+    let is_leaderboard_open = *panel_visibility != Visibility::Hidden;
 
-    if let Ok(Interaction::Pressed) = q_lb_show.single() {
-        if let Ok(mut vis) = q_panel.single_mut() {
-            *vis = Visibility::Inherited;
+    if !is_leaderboard_open {
+        if let Ok(Interaction::Pressed) = q_start.single() {
+            next_state.set(GameState::Playing);
+        }
+
+        if let Ok(Interaction::Pressed) = q_lb_show.single() {
+            if let Ok(mut vis) = q_panel.single_mut() {
+                *vis = Visibility::Inherited;
+            }
+        }
+
+        if let Ok(Interaction::Pressed) = q_exit.single() {
+            exit_events.write(AppExit::Success);
         }
     }
 
-    if let Ok(Interaction::Pressed) = q_lb_close.single() {
-        if let Ok(mut vis) = q_panel.single_mut() {
-            *vis = Visibility::Hidden;
+    if is_leaderboard_open {
+        if let Ok(Interaction::Pressed) = q_lb_close.single() {
+            if let Ok(mut vis) = q_panel.single_mut() {
+                *vis = Visibility::Hidden;
+            }
         }
-    }
-
-    if let Ok(Interaction::Pressed) = q_exit.single() {
-        exit_events.write(AppExit::Success);
     }
 }
 
