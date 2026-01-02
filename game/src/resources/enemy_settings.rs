@@ -13,12 +13,15 @@ pub struct EnemySettings {
     pub machine_speed: f32,
     pub machine_detection_range: f32,
     pub machine_acceleration: f32,
+    pub factory_spawn_timer: Timer,
+    pub difficulty_scale: f32,
+    pub difficulty_growth_rate: f32,
 }
 
 impl Default for EnemySettings {
     fn default() -> Self {
         Self {
-            factory_count: 5,
+            factory_count: 3,
             pollution_radius: 12.0,
             pollution_color: [0.8, 0.1, 0.1, 1.0],
             spread_tick_rate: 10.0,
@@ -28,6 +31,9 @@ impl Default for EnemySettings {
             machine_speed: 40.0,
             machine_detection_range: 200.0,
             machine_acceleration: 100.0,
+            factory_spawn_timer: Timer::from_seconds(30.0, TimerMode::Repeating),
+            difficulty_scale: 1.0,
+            difficulty_growth_rate: 0.01,
         }
     }
 }

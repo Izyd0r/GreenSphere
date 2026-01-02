@@ -41,3 +41,6 @@ pub struct CloseLeaderboardButton;
 
 #[derive(Component)]
 pub struct LeaderboardList;
+
+#[derive(Component)]
+pub struct FactoryNotificationText;
