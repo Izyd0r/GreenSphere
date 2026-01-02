@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 use bevy::platform::collections::HashSet;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::color::palettes::css::*;
 
 use rand::Rng;
 
@@ -15,7 +17,7 @@ use crate::components::machine::AlienMachine;
 use crate::components::factory::{AlienFactory, FactorySpawner};
 use crate::resources::dash_settings::DashSettings;
 use crate::resources::dash_state::DashState;
-use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton, ScoreHudText, TimeHudText, ScoreHud, SessionUi, MainMenuButton, ShowLeaderboardButton, LeaderboardPanel, CloseLeaderboardButton};
+use crate::components::ui::*;
 use crate::components::orbs::EnergyOrb;
 use crate::components::session::SessionEntity;
 use crate::resources::score::{Score, ScoreMessage};
@@ -61,7 +63,7 @@ pub(crate) fn plugin(app: &mut App) {
         .register_type::<Leaderboard>()
         .add_systems(Startup, (setup_planet, build_adjacency).chain())
         .add_systems(OnEnter(GameState::MainMenu), setup_main_menu)
-        .add_systems(Update, (ui_button_hover_system, main_menu_system.run_if(in_state(GameState::MainMenu))))
+        .add_systems(Update, (ui_button_hover_system, (main_menu_system, leaderboard_scroll_system).run_if(in_state(GameState::MainMenu))))
         .add_systems(OnExit(GameState::MainMenu), cleanup_main_menu)
         .add_systems(OnEnter(GameState::Playing), (
             spawn_session_objects, 
@@ -1106,10 +1108,7 @@ fn update_time_hud_system(
     }
 }
 
-fn setup_main_menu(
-    mut commands: Commands, 
-    leaderboard: Res<Leaderboard>
-) {
+fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
     commands.spawn((
         MainMenuRoot,
         Node {
@@ -1145,6 +1144,7 @@ fn setup_main_menu(
 
         parent.spawn((
             LeaderboardPanel,
+            Interaction::default(),
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),
@@ -1159,12 +1159,12 @@ fn setup_main_menu(
         .with_children(|overlay| {
             overlay.spawn((
                 Node {
-                    width: Val::Px(450.0),
+                    width: Val::Px(600.0),
+                    height: Val::Px(550.0),
                     padding: UiRect::all(Val::Px(30.0)),
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
-                    row_gap: Val::Px(10.0),
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.1, 0.1, 0.1)),
@@ -1174,31 +1174,58 @@ fn setup_main_menu(
                 box_node.spawn((
                     Text::new("TOP PLAYERS"),
                     TextFont { font_size: 32.0, ..default() },
-                    TextColor(Color::WHITE),
+                    TextColor(Color::from(WHITE)),
                     Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() },
                 ));
 
-                box_node.spawn(Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Column,
-                    width: Val::Percent(100.0),
-                    margin: UiRect::bottom(Val::Px(30.0)),
-                    ..default()
-                })
-                .with_children(|list| {
-                    for (name, score) in &leaderboard.entries {
-                        list.spawn(Node {
+                box_node.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(300.0),
+                        overflow: Overflow::clip_y(),
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    },
+                ))
+                .with_children(|viewport| {
+                    viewport.spawn((
+                        LeaderboardList,
+                        Node {
                             display: Display::Flex,
-                            justify_content: JustifyContent::SpaceBetween,
+                            flex_direction: FlexDirection::Column,
                             width: Val::Percent(100.0),
-                            margin: UiRect::vertical(Val::Px(5.0)),
+                            position_type: PositionType::Relative,
                             ..default()
-                        })
-                        .with_children(|row| {
-                            row.spawn((Text::new(name.clone()), TextFont { font_size: 20.0, ..default() }, TextColor(Color::WHITE)));
-                            row.spawn((Text::new(score.to_string()), TextFont { font_size: 20.0, ..default() }, TextColor(Color::srgb(0.0, 1.0, 0.5))));
-                        });
-                    }
+                        },
+                    ))
+                    .with_children(|list| {
+                        for (name, score) in &leaderboard.entries {
+                            list.spawn((
+                                Node {
+                                    display: Display::Flex,
+                                    justify_content: JustifyContent::SpaceBetween,
+                                    width: Val::Percent(100.0),
+                                    padding: UiRect::all(Val::Px(10.0)),
+                                    border: UiRect::bottom(Val::Px(1.0)),
+                                    ..default()
+                                },
+                                BorderColor::from(BLACK),
+                            ))
+                            .with_children(|row| {
+                                row.spawn((
+                                    Text::new(name.clone()),
+                                    TextFont { font_size: 20.0, ..default() },
+                                    TextColor(Color::WHITE)
+                                ));
+                                row.spawn((
+                                    Text::new(score.to_string()),
+                                    TextFont { font_size: 20.0, ..default() },
+                                    TextColor(Color::from(LIGHT_CYAN))
+                                ));
+                            });
+                        }
+                    });
                 });
 
                 spawn_menu_button(box_node, CloseLeaderboardButton, "BACK", Color::srgb(0.3, 0.3, 0.3));
@@ -1282,4 +1309,57 @@ fn spawn_menu_button<T: Component>(
             TextColor(Color::WHITE),
         ));
     });
+}
+
+fn leaderboard_scroll_system(
+    mut mouse_wheel_events: MessageReader<MouseWheel>,
+    touches: Res<Touches>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    q_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    q_viewport: Query<(&Node, &GlobalTransform, &Interaction), With<LeaderboardPanel>>, 
+    mut q_list: Query<(&mut Node, &ComputedNode), (With<LeaderboardList>, Without<LeaderboardPanel>)>,
+    mut last_drag_pos: Local<Option<Vec2>>,
+) {
+    let Ok((mut list_node, list_computed)) = q_list.single_mut() else { return; };
+    let Ok((_viewport_node, _viewport_transform, interaction)) = q_viewport.single() else { return; };
+    let Ok(window) = q_window.single() else { return; };
+
+    let mut scroll_delta = 0.0;
+
+    for event in mouse_wheel_events.read() {
+        scroll_delta += match event.unit {
+            MouseScrollUnit::Line => event.y * 20.0,
+            MouseScrollUnit::Pixel => event.y,
+        };
+    }
+
+    let current_pos = if touches.any_just_pressed() || touches.any_just_pressed() {
+        touches.first_pressed_position()
+    } else if mouse_buttons.pressed(MouseButton::Left) {
+        window.cursor_position()
+    } else {
+        None
+    };
+
+    if let Some(pos) = current_pos {
+        if *interaction != Interaction::None {
+            if let Some(last_pos) = *last_drag_pos {
+                scroll_delta += pos.y - last_pos.y;
+            }
+            *last_drag_pos = Some(pos);
+        }
+    } else {
+        *last_drag_pos = None;
+    }
+
+    if scroll_delta != 0.0 {
+        let mut current_top = if let Val::Px(t) = list_node.top { t } else { 0.0 };
+        current_top += scroll_delta;
+
+        let list_height = list_computed.size().y;
+        let max_scroll = (list_height - 300.0).max(0.0);
+        
+        current_top = current_top.clamp(-max_scroll, 0.0);
+        list_node.top = Val::Px(current_top);
+    }
 }

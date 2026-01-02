@@ -38,3 +38,6 @@ pub struct LeaderboardPanel;
 
 #[derive(Component)]
 pub struct CloseLeaderboardButton;
+
+#[derive(Component)]
+pub struct LeaderboardList;
