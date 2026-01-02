@@ -23,3 +23,21 @@ pub struct TimeHudText;
 
 #[derive(Component)]
 pub struct ScoreHud;
+
+#[derive(Component)]
+pub struct SessionUi;
+
+#[derive(Component)]
+pub struct MainMenuButton;
+
+#[derive(Component)]
+pub struct ShowLeaderboardButton;
+
+#[derive(Component)]
+pub struct LeaderboardPanel;
+
+#[derive(Component)]
+pub struct CloseLeaderboardButton;
+
+#[derive(Component)]
+pub struct LeaderboardList;

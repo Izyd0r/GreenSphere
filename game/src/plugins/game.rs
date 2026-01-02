@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 use bevy::platform::collections::HashSet;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::color::palettes::css::*;
 
 use rand::Rng;
 
@@ -15,7 +17,7 @@ use crate::components::machine::AlienMachine;
 use crate::components::factory::{AlienFactory, FactorySpawner};
 use crate::resources::dash_settings::DashSettings;
 use crate::resources::dash_state::DashState;
-use crate::components::ui::{HealthBarFill, HealthText, DeathMenuRoot, RestartButton, ExitButton, ScoreHudText, TimeHudText, ScoreHud};
+use crate::components::ui::*;
 use crate::components::orbs::EnergyOrb;
 use crate::components::session::SessionEntity;
 use crate::resources::score::{Score, ScoreMessage};
@@ -24,14 +26,25 @@ use crate::prelude::{
     dash::DashButton,
 };
 use crate::resources::session_time::SessionTime;
+use crate::resources::player_profile::PlayerProfile;
+use crate::resources::leaderboard::Leaderboard;
+use crate::resources::reset_target::ResetTarget;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default, Reflect)]
 pub enum GameState {
     #[default]
+    MainMenu,
     Resetting,
     GameOver,
     Playing,
 }
+
+#[derive(Component)]
+pub struct MainMenuRoot;
+
+#[derive(Component)]
+pub struct StartButton;
+
 
 pub(crate) fn plugin(app: &mut App) {
     app
@@ -40,11 +53,18 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<EnemySettings>()
         .init_resource::<Score>()
         .init_resource::<SessionTime>()
+        .init_resource::<PlayerProfile>()
+        .init_resource::<ResetTarget>()
         .add_message::<ScoreMessage>()
         .register_type::<Score>()
         .register_type::<PlanetSettings>()
         .register_type::<EnemySettings>()
+        .init_resource::<Leaderboard>()
+        .register_type::<Leaderboard>()
         .add_systems(Startup, (setup_planet, build_adjacency).chain())
+        .add_systems(OnEnter(GameState::MainMenu), setup_main_menu)
+        .add_systems(Update, (ui_button_hover_system, (main_menu_system, leaderboard_scroll_system).run_if(in_state(GameState::MainMenu))))
+        .add_systems(OnExit(GameState::MainMenu), cleanup_main_menu)
         .add_systems(OnEnter(GameState::Playing), (
             spawn_session_objects, 
             spawn_factories,
@@ -104,30 +124,14 @@ fn setup_planet(
         MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::WHITE, ..default() })),
         Transform::from_scale(Vec3::splat(settings.radius)),
     ));
-}
 
-fn spawn_session_objects(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    settings: Res<PlanetSettings>,
-) {
     commands.spawn((
         PlanetPivot,
-        SessionEntity,
         Transform::IDENTITY,
         Visibility::Inherited,
         InheritedVisibility::default(),
     ))
     .with_children(|parent| {
-        parent.spawn((
-            PlayerBall { current_velocity: Vec3::ZERO, hp: 100.0, invincibility_timer: 0.0 }, 
-            Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(5).unwrap())),
-            MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.0, 1.0, 0.5), ..default() })),
-            Transform::from_xyz(0.0, settings.radius + settings.player_radius, 0.0)
-                .with_scale(Vec3::splat(settings.player_radius)),
-        ));
-
         parent.spawn((
             BirdEyeCamera,
             Camera3d::default(),
@@ -135,6 +139,26 @@ fn spawn_session_objects(
                 .looking_at(Vec3::new(0.0, settings.radius, 0.0), -Vec3::Z),
         ));
     });
+}
+
+fn spawn_session_objects(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    settings: Res<PlanetSettings>,
+    q_pivot: Query<Entity, With<PlanetPivot>>,
+) {
+    let Ok(pivot_entity) = q_pivot.single() else { return; };
+
+    let ball_entity = commands.spawn((
+        PlayerBall { current_velocity: Vec3::ZERO, hp: 100.0, invincibility_timer: 0.0 }, 
+        Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(5).unwrap())),
+        MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.0, 1.0, 0.5), ..default() })),
+        Transform::from_xyz(0.0, settings.radius + settings.player_radius, 0.0)
+            .with_scale(Vec3::splat(settings.player_radius)),
+    )).id();
+
+    commands.entity(pivot_entity).add_child(ball_entity);
 }
 
 fn build_adjacency(
@@ -669,7 +693,7 @@ fn player_health_sync_system(
 
 fn spawn_health_bar(mut commands: Commands) {
     commands.spawn((
-        SessionEntity,
+        SessionUi,
         Node {
             position_type: PositionType::Absolute,
             display: Display::Flex,
@@ -890,6 +914,23 @@ fn setup_death_menu(mut commands: Commands, score: Res<Score>, time: Res<Session
         ));
 
         parent.spawn((
+            MainMenuButton,
+            Interaction::default(),
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(50.0),
+                margin: UiRect::bottom(Val::Px(10.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.1, 0.3, 0.1)),
+            BorderRadius::all(Val::Px(10.0)),
+        )).with_children(|btn| {
+            btn.spawn((Text::new("MAIN MENU"), TextColor(Color::WHITE)));
+        });
+
+        parent.spawn((
             RestartButton,
             Interaction::default(),
             Node {
@@ -926,11 +967,19 @@ fn setup_death_menu(mut commands: Commands, score: Res<Score>, time: Res<Session
 
 fn death_menu_interaction_system(
     mut next_state: ResMut<NextState<GameState>>,
+    mut reset_target: ResMut<ResetTarget>, 
     q_restart: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>,
     q_exit: Query<&Interaction, (Changed<Interaction>, With<ExitButton>)>,
+    q_menu: Query<&Interaction, (Changed<Interaction>, With<MainMenuButton>)>,
     mut app_exit_events: MessageWriter<AppExit>,
 ) {
     if let Ok(Interaction::Pressed) = q_restart.single() {
+        reset_target.0 = GameState::Playing; 
+        next_state.set(GameState::Resetting);
+    }
+
+    if let Ok(Interaction::Pressed) = q_menu.single() {
+        reset_target.0 = GameState::MainMenu;
         next_state.set(GameState::Resetting);
     }
 
@@ -949,15 +998,15 @@ fn cleanup_death_menu(mut commands: Commands, q_root: Query<Entity, With<DeathMe
 fn world_reset_system(
     mut commands: Commands,
     mut next_state: ResMut<NextState<GameState>>,
-    q_cleanup: Query<Entity, With<SessionEntity>>,
-    q_others: Query<Entity, Or<(With<AlienFactory>, With<AlienMachine>, With<EnergyOrb>)>>,
+    reset_target: Res<ResetTarget>,
+    q_cleanup: Query<Entity, Or<(With<PlayerBall>, With<AlienFactory>, With<AlienMachine>, With<EnergyOrb>)>>,
     mut q_planet: Query<(&mut PlanetData, &Mesh3d), With<Planet>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut dash_state: ResMut<DashState>,
     mut score: ResMut<Score>,
-    mut session_time: ResMut<SessionTime>,
+    mut time: ResMut<SessionTime>,
 ) {
-    for entity in q_cleanup.iter().chain(q_others.iter()) {
+    for entity in q_cleanup.iter() {
         commands.entity(entity).despawn_children();
         commands.entity(entity).despawn();
     }
@@ -972,11 +1021,10 @@ fn world_reset_system(
     }
 
     *dash_state = DashState::default();
-    dash_state.current_energy = 100.0;
-    
     score.current = 0;
-    session_time.elapsed = 0.0;
-    next_state.set(GameState::Playing);
+    time.elapsed = 0.0;
+
+    next_state.set(reset_target.0.clone());
 }
 
 fn score_event_handler(
@@ -990,15 +1038,17 @@ fn score_event_handler(
 
 fn spawn_score_hud(mut commands: Commands) {
     commands.spawn((
-        ScoreHud,
-        SessionEntity,
+        ScoreHud, 
+        SessionUi,
         Node {
             position_type: PositionType::Absolute,
             top: Val::VMin(2.0),
             width: Val::Percent(100.0),
             display: Display::Flex,
+            flex_direction: FlexDirection::Row,
             justify_content: JustifyContent::Center,
-            column_gap: Val::VMin(5.0),
+            align_items: AlignItems::Center,
+            column_gap: Val::VMin(10.0),
             ..default()
         },
         ZIndex(100),
@@ -1033,7 +1083,7 @@ fn update_score_hud_system(
 
 fn cleanup_game_ui(
     mut commands: Commands,
-    q_ui: Query<Entity, Or<(With<VjoyBase>, With<DashButton>, With<HealthBarFill>, With<ScoreHudText>,)>>,
+    q_ui: Query<Entity, Or<(With<VjoyBase>, With<DashButton>, With<HealthBarFill>, With<ScoreHud>, With<DeathMenuRoot>, With<SessionUi>)>>,
 ) {
     for entity in q_ui.iter() {
         if let Ok(mut entity_cmds) = commands.get_entity(entity) {
@@ -1055,5 +1105,271 @@ fn update_time_hud_system(
 ) {
     if let Ok(mut text) = q_text.single_mut() {
         text.0 = format!("TIME: {}", session_time.format());
+    }
+}
+
+fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
+    commands.spawn((
+        MainMenuRoot,
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            display: Display::Flex,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        ZIndex(200),
+    ))
+    .with_children(|parent| {
+        parent.spawn(Node {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(15.0),
+            ..default()
+        })
+        .with_children(|menu| {
+            menu.spawn((
+                Text::new("GREEN SPHERE"),
+                TextFont { font_size: 80.0, ..default() },
+                TextColor(Color::srgb(0.0, 1.0, 0.5)),
+                Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() },
+            ));
+
+            spawn_menu_button(menu, StartButton, "START MISSION", Color::srgb(0.2, 0.2, 0.2));
+            spawn_menu_button(menu, ShowLeaderboardButton, "LEADERBOARD", Color::srgb(0.2, 0.2, 0.4));
+            spawn_menu_button(menu, ExitButton, "EXIT", Color::srgb(0.2, 0.1, 0.1));
+        });
+
+        parent.spawn((
+            LeaderboardPanel,
+            Interaction::default(),
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                display: Display::Flex,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+            ZIndex(10),
+            Visibility::Hidden,
+        ))
+        .with_children(|overlay| {
+            overlay.spawn((
+                Node {
+                    width: Val::Px(600.0),
+                    height: Val::Px(550.0),
+                    padding: UiRect::all(Val::Px(30.0)),
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.1, 0.1, 0.1)),
+                BorderRadius::all(Val::Px(15.0)),
+            ))
+            .with_children(|box_node| {
+                box_node.spawn((
+                    Text::new("TOP PLAYERS"),
+                    TextFont { font_size: 32.0, ..default() },
+                    TextColor(Color::from(WHITE)),
+                    Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() },
+                ));
+
+                box_node.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(300.0),
+                        overflow: Overflow::clip_y(),
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    },
+                ))
+                .with_children(|viewport| {
+                    viewport.spawn((
+                        LeaderboardList,
+                        Node {
+                            display: Display::Flex,
+                            flex_direction: FlexDirection::Column,
+                            width: Val::Percent(100.0),
+                            position_type: PositionType::Relative,
+                            ..default()
+                        },
+                    ))
+                    .with_children(|list| {
+                        for (name, score) in &leaderboard.entries {
+                            list.spawn((
+                                Node {
+                                    display: Display::Flex,
+                                    justify_content: JustifyContent::SpaceBetween,
+                                    width: Val::Percent(100.0),
+                                    padding: UiRect::all(Val::Px(10.0)),
+                                    border: UiRect::bottom(Val::Px(1.0)),
+                                    ..default()
+                                },
+                                BorderColor::from(BLACK),
+                            ))
+                            .with_children(|row| {
+                                row.spawn((
+                                    Text::new(name.clone()),
+                                    TextFont { font_size: 20.0, ..default() },
+                                    TextColor(Color::WHITE)
+                                ));
+                                row.spawn((
+                                    Text::new(score.to_string()),
+                                    TextFont { font_size: 20.0, ..default() },
+                                    TextColor(Color::from(LIGHT_CYAN))
+                                ));
+                            });
+                        }
+                    });
+                });
+
+                spawn_menu_button(box_node, CloseLeaderboardButton, "BACK", Color::srgb(0.3, 0.3, 0.3));
+            });
+        });
+    });
+}
+
+fn main_menu_system(
+    mut next_state: ResMut<NextState<GameState>>,
+    q_start: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
+    q_exit: Query<&Interaction, (Changed<Interaction>, With<ExitButton>)>,
+    q_lb_show: Query<&Interaction, (Changed<Interaction>, With<ShowLeaderboardButton>)>,
+    q_lb_close: Query<&Interaction, (Changed<Interaction>, With<CloseLeaderboardButton>)>,
+    mut q_panel: Query<&mut Visibility, With<LeaderboardPanel>>,
+    mut exit_events: MessageWriter<AppExit>,
+) {
+    let Ok(panel_visibility) = q_panel.single() else { return; };
+    
+    let is_leaderboard_open = *panel_visibility != Visibility::Hidden;
+
+    if !is_leaderboard_open {
+        if let Ok(Interaction::Pressed) = q_start.single() {
+            next_state.set(GameState::Playing);
+        }
+
+        if let Ok(Interaction::Pressed) = q_lb_show.single() {
+            if let Ok(mut vis) = q_panel.single_mut() {
+                *vis = Visibility::Inherited;
+            }
+        }
+
+        if let Ok(Interaction::Pressed) = q_exit.single() {
+            exit_events.write(AppExit::Success);
+        }
+    }
+
+    if is_leaderboard_open {
+        if let Ok(Interaction::Pressed) = q_lb_close.single() {
+            if let Ok(mut vis) = q_panel.single_mut() {
+                *vis = Visibility::Hidden;
+            }
+        }
+    }
+}
+
+fn cleanup_main_menu(mut commands: Commands, q: Query<Entity, With<MainMenuRoot>>) {
+    if let Ok(e) = q.single() {
+        commands.entity(e).despawn();
+    }
+}
+
+fn ui_button_hover_system(
+    mut q_buttons: Query<(&Interaction, &mut BackgroundColor), (With<Button>, Changed<Interaction>)>,
+) {
+    for (interaction, mut bg) in q_buttons.iter_mut() {
+        match *interaction {
+            Interaction::Hovered => bg.0 = Color::srgb(0.3, 0.3, 0.3),
+            Interaction::None => bg.0 = Color::srgb(0.2, 0.2, 0.2),
+            _ => {}
+        }
+    }
+}
+
+fn spawn_menu_button<T: Component>(
+    parent: &mut ChildSpawnerCommands, 
+    marker: T, 
+    label: &str, 
+    color: Color
+) {
+    parent.spawn((
+        Button,
+        marker,
+        Interaction::default(),
+        Node {
+            width: Val::Px(250.0),
+            height: Val::Px(60.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(color),
+        BorderRadius::all(Val::Px(10.0)),
+    ))
+    .with_children(|btn| {
+        btn.spawn((
+            Text::new(label),
+            TextFont { font_size: 25.0, ..default() },
+            TextColor(Color::WHITE),
+        ));
+    });
+}
+
+fn leaderboard_scroll_system(
+    mut mouse_wheel_events: MessageReader<MouseWheel>,
+    touches: Res<Touches>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    q_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    q_viewport: Query<(&Node, &GlobalTransform, &Interaction), With<LeaderboardPanel>>, 
+    mut q_list: Query<(&mut Node, &ComputedNode), (With<LeaderboardList>, Without<LeaderboardPanel>)>,
+    mut last_drag_pos: Local<Option<Vec2>>,
+) {
+    let Ok((mut list_node, list_computed)) = q_list.single_mut() else { return; };
+    let Ok((_viewport_node, _viewport_transform, interaction)) = q_viewport.single() else { return; };
+    let Ok(window) = q_window.single() else { return; };
+
+    let mut scroll_delta = 0.0;
+
+    for event in mouse_wheel_events.read() {
+        scroll_delta += match event.unit {
+            MouseScrollUnit::Line => event.y * 20.0,
+            MouseScrollUnit::Pixel => event.y,
+        };
+    }
+
+    let current_pos = if touches.any_just_pressed() || touches.any_just_pressed() {
+        touches.first_pressed_position()
+    } else if mouse_buttons.pressed(MouseButton::Left) {
+        window.cursor_position()
+    } else {
+        None
+    };
+
+    if let Some(pos) = current_pos {
+        if *interaction != Interaction::None {
+            if let Some(last_pos) = *last_drag_pos {
+                scroll_delta += pos.y - last_pos.y;
+            }
+            *last_drag_pos = Some(pos);
+        }
+    } else {
+        *last_drag_pos = None;
+    }
+
+    if scroll_delta != 0.0 {
+        let mut current_top = if let Val::Px(t) = list_node.top { t } else { 0.0 };
+        current_top += scroll_delta;
+
+        let list_height = list_computed.size().y;
+        let max_scroll = (list_height - 300.0).max(0.0);
+        
+        current_top = current_top.clamp(-max_scroll, 0.0);
+        list_node.top = Val::Px(current_top);
     }
 }
