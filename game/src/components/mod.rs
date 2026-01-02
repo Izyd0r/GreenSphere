@@ -10,3 +10,4 @@ pub(super) mod dash;
 pub(super) mod ui;
 pub(super) mod orbs;
 pub(super) mod session;
+pub(super) mod notification_timer;

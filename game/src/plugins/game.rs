@@ -29,6 +29,7 @@ use crate::resources::session_time::SessionTime;
 use crate::resources::player_profile::PlayerProfile;
 use crate::resources::leaderboard::Leaderboard;
 use crate::resources::reset_target::ResetTarget;
+use crate::components::notification_timer::NotificationTimer;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default, Reflect)]
 pub enum GameState {
@@ -72,6 +73,7 @@ pub(crate) fn plugin(app: &mut App) {
             crate::plugins::vjoy::spawn_dash_button,
             spawn_health_bar,
             spawn_score_hud,
+            spawn_factory_notification,
         ).chain())        
         .add_systems(Update, (
             (planetary_control_system, sync_visuals).chain(),
@@ -88,7 +90,9 @@ pub(crate) fn plugin(app: &mut App) {
             
             (score_event_handler, update_score_hud_system),
 
-            (track_session_time_system, update_time_hud_system)
+            (track_session_time_system, update_time_hud_system),
+
+            (factory_director_system, notification_lifecycle_system)
         ).run_if(in_state(GameState::Playing)).run_if(any_with_component::<PlayerBall>))
         .add_systems(OnEnter(GameState::GameOver), (setup_death_menu, cleanup_game_ui))
         .add_systems(Update, death_menu_interaction_system.run_if(in_state(GameState::GameOver)))
@@ -1372,4 +1376,124 @@ fn leaderboard_scroll_system(
         current_top = current_top.clamp(-max_scroll, 0.0);
         list_node.top = Val::Px(current_top);
     }
+}
+
+fn factory_director_system(
+    time: Res<Time>,
+    settings: Res<PlanetSettings>,
+    mut enemy_settings: ResMut<EnemySettings>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
+    mut q_planet: Query<(&mut PlanetData, &Mesh3d, &Transform), With<Planet>>,
+    mut q_notice: Query<(&mut Visibility, &mut NotificationTimer, &Children), With<FactoryNotificationText>>,
+    mut q_text_color: Query<&mut TextColor>,
+    mut local_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+) {
+    let dt = time.delta_secs();
+    enemy_settings.difficulty_scale += enemy_settings.difficulty_growth_rate * dt;
+    let current_diff = enemy_settings.difficulty_scale;
+
+    enemy_settings.factory_spawn_timer.tick(time.delta().mul_f32(current_diff));
+
+    if enemy_settings.factory_spawn_timer.just_finished() {
+        let mut rng = rand::rng();
+        let theta = rng.random_range(0.0..std::f32::consts::TAU);
+        let phi = (rng.random_range(-1.0..1.0) as f32).acos();
+        let normal = Vec3::new(phi.sin() * theta.cos(), phi.cos(), phi.sin() * theta.sin());
+        
+        let spawn_pos = normal * (settings.radius + 6.0);
+
+        let (f_mesh, f_mat) = local_assets.get_or_insert_with(|| {
+            (
+                meshes.add(Rectangle::new(12.0, 12.0)), 
+                materials.add(StandardMaterial {
+                    base_color_texture: Some(asset_server.load("textures/factory.png")),
+                    alpha_mode: AlphaMode::Mask(0.5),
+                    cull_mode: None, 
+                    unlit: true,
+                    ..default()
+                })
+            )
+        }).clone();
+
+        commands.spawn((
+            AlienFactory,
+            FactorySpawner { 
+                timer: Timer::from_seconds(10.0 / current_diff, TimerMode::Repeating) 
+            },
+            Mesh3d(f_mesh),
+            MeshMaterial3d(f_mat),
+            Transform::from_translation(spawn_pos).looking_at(spawn_pos + normal, Vec3::Y),
+            Visibility::Inherited,
+            InheritedVisibility::default(),
+        ));
+
+        if let Ok((mut planet_data, mesh_handle, planet_transform)) = q_planet.single_mut() {
+            if let Some(mesh) = meshes.get_mut(mesh_handle) {
+                pollute_area(&mut planet_data, mesh, spawn_pos - planet_transform.translation, 
+                             enemy_settings.pollution_radius / settings.radius, enemy_settings.pollution_color);
+            }
+        }
+        
+        if let Ok((mut vis, mut timer, children)) = q_notice.single_mut() {
+            *vis = Visibility::Inherited;
+            timer.0.reset(); 
+            for &child in children {
+                if let Ok(mut color) = q_text_color.get_mut(child) {
+                    color.0 = Color::srgb(1.0, 0.0, 0.0);
+                }
+            }
+        }
+    }
+}
+
+fn notification_lifecycle_system(
+    time: Res<Time>,
+    mut q_parent: Query<(&mut Visibility, &mut NotificationTimer, &Children), With<FactoryNotificationText>>,
+    mut q_text: Query<&mut TextColor>,
+) {
+    let Ok((mut vis, mut timer, children)) = q_parent.single_mut() else { return; };
+
+    if *vis == Visibility::Hidden { return; }
+
+    timer.0.tick(time.delta());
+
+    if timer.0.just_finished() {
+        *vis = Visibility::Hidden;
+    } else {
+        let progress = timer.0.fraction_remaining();
+        for &child in children { 
+            if let Ok(mut color) = q_text.get_mut(child) {
+                color.0 = color.0.with_alpha(progress);
+            }
+        }
+    }
+}
+
+fn spawn_factory_notification(mut commands: Commands) {
+    commands.spawn((
+        SessionUi,
+        FactoryNotificationText,
+        NotificationTimer(Timer::from_seconds(3.0, TimerMode::Once)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::VMin(12.0), 
+            width: Val::Percent(100.0),
+            display: Display::Flex,
+            justify_content: JustifyContent::Center, 
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        Visibility::Hidden,
+        ZIndex(100),
+    ))
+    .with_children(|parent| {
+        parent.spawn((
+            Text::new("! FACTORY DEPLOYED !"),
+            TextFont { font_size: 30.0, ..default() },
+            TextColor(Color::srgb(1.0, 0.0, 0.0)), 
+        ));
+    });
 }
