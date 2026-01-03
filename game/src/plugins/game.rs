@@ -65,7 +65,7 @@ pub(crate) fn plugin(app: &mut App) {
         .register_type::<Leaderboard>()
         .add_systems(Startup, (setup_planet, build_adjacency).chain())
         .add_systems(OnEnter(GameState::MainMenu), setup_main_menu)
-        .add_systems(Update, (ui_button_hover_system, (main_menu_system, leaderboard_scroll_system, username_typing_system).run_if(in_state(GameState::MainMenu))))
+        .add_systems(Update, (ui_button_hover_system, (main_menu_system, leaderboard_scroll_system, username_typing_system, toggle_ime_system).run_if(in_state(GameState::MainMenu))))
         .add_systems(OnExit(GameState::MainMenu), cleanup_main_menu)
         .add_systems(OnEnter(GameState::Playing), (
             spawn_session_objects, 
@@ -1461,32 +1461,40 @@ fn spawn_factory_notification(mut commands: Commands) {
 
 fn username_typing_system(
     mut key_msgs: MessageReader<KeyboardInput>,
+    mut ime_msgs: MessageReader<Ime>,
     mut profile: ResMut<PlayerProfile>,
     mut q_text: Query<&mut Text, With<UsernameInputText>>,
 ) {
     let mut changed = false;
 
     for event in key_msgs.read() {
-        if !event.state.is_pressed() {
-            continue;
-        }
+        if !event.state.is_pressed() { continue; }
 
         match &event.logical_key {
             Key::Backspace => {
                 profile.username.pop();
                 changed = true;
             }
-            
-            Key::Character(c) => {
-                if let Some(actual_char) = c.chars().next() {
-                    if !actual_char.is_control() && profile.username.len() < 12 {
-                        profile.username.push(actual_char);
+            Key::Character(smol_str) => {
+                for c in smol_str.chars() {
+                    if !c.is_control() && profile.username.len() < 12 {
+                        profile.username.push(c);
                         changed = true;
                     }
                 }
             }
-            
             _ => {}
+        }
+    }
+
+    for msg in ime_msgs.read() {
+        if let Ime::Commit { value, .. } = msg {
+            for c in value.chars() {
+                if !c.is_control() && profile.username.len() < 12 {
+                    profile.username.push(c);
+                    changed = true;
+                }
+            }
         }
     }
 
@@ -1498,5 +1506,20 @@ fn username_typing_system(
                 profile.username.clone()
             };
         }
+    }
+}
+
+fn toggle_ime_system(
+    q_input_box: Query<&Interaction, (With<UsernameInputText>, Changed<Interaction>)>,
+    mut q_window: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+) {
+    let Ok(interaction) = q_input_box.single() else { return; };
+    let Ok(mut window) = q_window.single_mut() else { return; };
+
+    if *interaction == Interaction::Pressed {
+        window.ime_enabled = true;
+        
+        window.ime_position = Vec2::new(window.width() / 2.0, window.height() / 2.0);
+        
     }
 }
