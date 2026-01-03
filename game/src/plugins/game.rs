@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy::platform::collections::HashSet;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::color::palettes::css::*;
+use bevy::input::keyboard::*;
 
 use rand::Rng;
 
@@ -64,7 +65,7 @@ pub(crate) fn plugin(app: &mut App) {
         .register_type::<Leaderboard>()
         .add_systems(Startup, (setup_planet, build_adjacency).chain())
         .add_systems(OnEnter(GameState::MainMenu), setup_main_menu)
-        .add_systems(Update, (ui_button_hover_system, (main_menu_system, leaderboard_scroll_system).run_if(in_state(GameState::MainMenu))))
+        .add_systems(Update, (ui_button_hover_system, (main_menu_system, leaderboard_scroll_system, username_typing_system).run_if(in_state(GameState::MainMenu))))
         .add_systems(OnExit(GameState::MainMenu), cleanup_main_menu)
         .add_systems(OnEnter(GameState::Playing), (
             spawn_session_objects, 
@@ -880,7 +881,12 @@ fn death_system(
     }
 }
 
-fn setup_death_menu(mut commands: Commands, score: Res<Score>, time: Res<SessionTime>) {
+fn setup_death_menu(
+    mut commands: Commands, 
+    score: Res<Score>, 
+    time: Res<SessionTime>,
+    profile: Res<PlayerProfile>
+) {
     commands.spawn((
         DeathMenuRoot,
         Node {
@@ -890,95 +896,50 @@ fn setup_death_menu(mut commands: Commands, score: Res<Score>, time: Res<Session
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
+            row_gap: Val::VMin(2.0), 
+            position_type: PositionType::Absolute,
             ..default()
         },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.9)),
         ZIndex(200),
     ))
     .with_children(|parent| {
         parent.spawn((
             Text::new("GAME OVER!"),
             TextFont { font_size: 80.0, ..default() },
-            TextColor(Color::srgb(1.0, 0.2, 0.2)),
-            Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() },
+            TextColor(Color::srgb(1.0, 0.1, 0.1)),
         ));
 
         parent.spawn((
-            Text::new(format!("FINAL SCORE: {}", score.current)),
-            TextFont { font_size: 32.0, ..default() },
+            Text::new(format!("SCORE: {} | TIME: {}", score.current, time.format())),
+            TextFont { font_size: 30.0, ..default() },
             TextColor(Color::WHITE),
-            Node { margin: UiRect::bottom(Val::Px(40.0)), ..default() },
+            Node { margin: UiRect::bottom(Val::VMin(2.0)), ..default() },
         ));
 
-        parent.spawn((
-            Text::new(format!("SURVIVED FOR: {}", time.format())),
-            TextFont { font_size: 28.0, ..default() },
-            TextColor(Color::WHITE),
-            Node { margin: UiRect::bottom(Val::Px(40.0)), ..default() },
-        ));
+        if !profile.username.trim().is_empty() {
+            spawn_menu_button(parent, SubmitScoreButton, "SUBMIT TO CLOUD", Color::srgb(0.0, 0.6, 0.8));
+        }
 
-        parent.spawn((
-            MainMenuButton,
-            Interaction::default(),
-            Node {
-                width: Val::Px(200.0),
-                height: Val::Px(50.0),
-                margin: UiRect::bottom(Val::Px(10.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.1, 0.3, 0.1)),
-            BorderRadius::all(Val::Px(10.0)),
-        )).with_children(|btn| {
-            btn.spawn((Text::new("MAIN MENU"), TextColor(Color::WHITE)));
-        });
-
-        parent.spawn((
-            RestartButton,
-            Interaction::default(),
-            Node {
-                width: Val::Px(200.0),
-                height: Val::Px(50.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                margin: UiRect::bottom(Val::Px(10.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
-            BorderRadius::all(Val::Px(10.0)),
-        )).with_children(|btn| {
-            btn.spawn((Text::new("RESTART"), TextFont { font_size: 20.0, ..default() }, TextColor(Color::WHITE)));
-        });
-
-        parent.spawn((
-            ExitButton,
-            Interaction::default(),
-            Node {
-                width: Val::Px(200.0),
-                height: Val::Px(50.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgb(0.15, 0.15, 0.15)),
-            BorderRadius::all(Val::Px(10.0)),
-        )).with_children(|btn| {
-            btn.spawn((Text::new("EXIT"), TextFont { font_size: 20.0, ..default() }, TextColor(Color::WHITE)));
-        });
+        spawn_menu_button(parent, RestartButton, "RESTART", Color::srgb(0.2, 0.2, 0.2));
+        spawn_menu_button(parent, MainMenuButton, "MAIN MENU", Color::srgb(0.1, 0.3, 0.1));
     });
 }
 
 fn death_menu_interaction_system(
     mut next_state: ResMut<NextState<GameState>>,
-    mut reset_target: ResMut<ResetTarget>, 
+    mut reset_target: ResMut<ResetTarget>,
+    mut leaderboard: ResMut<Leaderboard>,
+    score: Res<Score>,
+    time: Res<SessionTime>,
+    mut profile: ResMut<PlayerProfile>,
     q_restart: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>,
-    q_exit: Query<&Interaction, (Changed<Interaction>, With<ExitButton>)>,
     q_menu: Query<&Interaction, (Changed<Interaction>, With<MainMenuButton>)>,
-    mut app_exit_events: MessageWriter<AppExit>,
+    q_submit: Query<(Entity, &Interaction), (Changed<Interaction>, With<SubmitScoreButton>)>,
+    mut commands: Commands,
 ) {
     if let Ok(Interaction::Pressed) = q_restart.single() {
-        reset_target.0 = GameState::Playing; 
+        reset_target.0 = GameState::Playing;
         next_state.set(GameState::Resetting);
     }
 
@@ -987,8 +948,21 @@ fn death_menu_interaction_system(
         next_state.set(GameState::Resetting);
     }
 
-    if let Ok(Interaction::Pressed) = q_exit.single() {
-        app_exit_events.write(AppExit::Success);
+    if let Ok((entity, Interaction::Pressed)) = q_submit.single() {
+
+        // Add to local leaderboard
+        leaderboard.entries.push((
+            profile.username.clone(), 
+            score.current, 
+            time.elapsed
+        ));
+
+        profile.username = String::new();
+
+        leaderboard.entries.sort_by(|a, b| b.1.cmp(&a.1));
+
+        commands.entity(entity).despawn();
+
     }
 }
 
@@ -1114,7 +1088,8 @@ fn update_time_hud_system(
 
 fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
     commands.spawn((
-        MainMenuRoot,
+        MainMenuRoot, 
+        SessionUi,
         Node {
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
@@ -1126,6 +1101,7 @@ fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
         ZIndex(200),
     ))
     .with_children(|parent| {
+        
         parent.spawn(Node {
             display: Display::Flex,
             flex_direction: FlexDirection::Column,
@@ -1137,9 +1113,28 @@ fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
             menu.spawn((
                 Text::new("GREEN SPHERE"),
                 TextFont { font_size: 80.0, ..default() },
-                TextColor(Color::srgb(0.0, 1.0, 0.5)),
-                Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() },
+                TextColor(Color::srgb(0.0, 1.0, 0.5))
             ));
+            
+            menu.spawn((
+                Node {
+                    width: Val::Px(300.0),
+                    height: Val::Px(50.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BorderRadius::all(Val::Px(5.0)),
+                BackgroundColor(Color::srgb(0.1, 0.1, 0.1).into()),
+            ))
+            .with_children(|p| {
+                p.spawn((
+                    UsernameInputText,
+                    Text::new("TYPE NAME..."),
+                    TextFont { font_size: 20.0, ..default() },
+                    TextColor(Color::from(GRAY))
+                ));
+            });
 
             spawn_menu_button(menu, StartButton, "START MISSION", Color::srgb(0.2, 0.2, 0.2));
             spawn_menu_button(menu, ShowLeaderboardButton, "LEADERBOARD", Color::srgb(0.2, 0.2, 0.4));
@@ -1158,15 +1153,13 @@ fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
-            ZIndex(10),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.95)),
             Visibility::Hidden,
         ))
         .with_children(|overlay| {
             overlay.spawn((
                 Node {
-                    width: Val::Px(600.0),
-                    height: Val::Px(550.0),
+                    width: Val::Px(500.0),
                     padding: UiRect::all(Val::Px(30.0)),
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
@@ -1174,65 +1167,33 @@ fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.1, 0.1, 0.1)),
-                BorderRadius::all(Val::Px(15.0)),
+                BorderRadius::all(Val::Px(15.0))
             ))
             .with_children(|box_node| {
                 box_node.spawn((
-                    Text::new("TOP PLAYERS"),
+                    Text::new("TOP SURVIVORS"),
                     TextFont { font_size: 32.0, ..default() },
-                    TextColor(Color::from(WHITE)),
-                    Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() },
+                    TextColor(Color::from(YELLOW))
                 ));
 
-                box_node.spawn((
-                    Node {
-                        width: Val::Percent(100.0),
-                        height: Val::Px(300.0),
-                        overflow: Overflow::clip_y(),
+                for (name, score, time) in &leaderboard.entries {
+                    box_node.spawn(Node {
                         display: Display::Flex,
-                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::SpaceBetween,
+                        width: Val::Percent(100.0),
+                        margin: UiRect::vertical(Val::Px(5.0)),
                         ..default()
-                    },
-                ))
-                .with_children(|viewport| {
-                    viewport.spawn((
-                        LeaderboardList,
-                        Node {
-                            display: Display::Flex,
-                            flex_direction: FlexDirection::Column,
-                            width: Val::Percent(100.0),
-                            position_type: PositionType::Relative,
-                            ..default()
-                        },
-                    ))
-                    .with_children(|list| {
-                        for (name, score) in &leaderboard.entries {
-                            list.spawn((
-                                Node {
-                                    display: Display::Flex,
-                                    justify_content: JustifyContent::SpaceBetween,
-                                    width: Val::Percent(100.0),
-                                    padding: UiRect::all(Val::Px(10.0)),
-                                    border: UiRect::bottom(Val::Px(1.0)),
-                                    ..default()
-                                },
-                                BorderColor::from(BLACK),
-                            ))
-                            .with_children(|row| {
-                                row.spawn((
-                                    Text::new(name.clone()),
-                                    TextFont { font_size: 20.0, ..default() },
-                                    TextColor(Color::WHITE)
-                                ));
-                                row.spawn((
-                                    Text::new(score.to_string()),
-                                    TextFont { font_size: 20.0, ..default() },
-                                    TextColor(Color::from(LIGHT_CYAN))
-                                ));
-                            });
-                        }
+                    })
+                    .with_children(|row| {
+                        row.spawn((Text::new(name.clone()), TextColor(Color::WHITE)));
+                        let mins = (*time / 60.0) as u32; 
+                        let secs = (*time % 60.0) as u32;
+                        row.spawn((
+                            Text::new(format!("{} [{:02}:{:02}]", score, mins, secs)), 
+                            TextColor(Color::from(LIGHT_CYAN))
+                        ));
                     });
-                });
+                }
 
                 spawn_menu_button(box_node, CloseLeaderboardButton, "BACK", Color::srgb(0.3, 0.3, 0.3));
             });
@@ -1496,4 +1457,46 @@ fn spawn_factory_notification(mut commands: Commands) {
             TextColor(Color::srgb(1.0, 0.0, 0.0)), 
         ));
     });
+}
+
+fn username_typing_system(
+    mut key_msgs: MessageReader<KeyboardInput>,
+    mut profile: ResMut<PlayerProfile>,
+    mut q_text: Query<&mut Text, With<UsernameInputText>>,
+) {
+    let mut changed = false;
+
+    for event in key_msgs.read() {
+        if !event.state.is_pressed() {
+            continue;
+        }
+
+        match &event.logical_key {
+            Key::Backspace => {
+                profile.username.pop();
+                changed = true;
+            }
+            
+            Key::Character(c) => {
+                if let Some(actual_char) = c.chars().next() {
+                    if !actual_char.is_control() && profile.username.len() < 12 {
+                        profile.username.push(actual_char);
+                        changed = true;
+                    }
+                }
+            }
+            
+            _ => {}
+        }
+    }
+
+    if changed {
+        if let Ok(mut text) = q_text.single_mut() {
+            text.0 = if profile.username.is_empty() {
+                "TYPE NAME...".to_string()
+            } else {
+                profile.username.clone()
+            };
+        }
+    }
 }

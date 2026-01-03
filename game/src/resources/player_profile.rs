@@ -8,6 +8,6 @@ pub struct PlayerProfile {
 
 impl Default for PlayerProfile {
     fn default() -> Self {
-        Self { username: "Player123".to_string() }
+        Self { username: "".to_string() }
     }
 }
