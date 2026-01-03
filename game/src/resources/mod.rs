@@ -10,3 +10,5 @@ pub(super) mod session_time;
 pub(super) mod player_profile;
 pub(super) mod leaderboard;
 pub(super) mod reset_target;
+pub(super) mod firebase_config;
+pub(super) mod leaderboard_channel;

@@ -5,6 +5,7 @@ use bevy::color::palettes::css::*;
 use bevy::input::keyboard::*;
 
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 use crate::prelude::session_time;
 use crate::resources::vjoy_output::VjoyOutput;
@@ -28,9 +29,11 @@ use crate::prelude::{
 };
 use crate::resources::session_time::SessionTime;
 use crate::resources::player_profile::PlayerProfile;
-use crate::resources::leaderboard::Leaderboard;
+use crate::resources::leaderboard::{Leaderboard, FirebaseEntry};
 use crate::resources::reset_target::ResetTarget;
 use crate::components::notification_timer::NotificationTimer;
+use crate::resources::firebase_config::FirebaseConfig;
+use crate::resources::leaderboard_channel::LeaderboardChannel;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default, Reflect)]
 pub enum GameState {
@@ -47,6 +50,9 @@ pub struct MainMenuRoot;
 #[derive(Component)]
 pub struct StartButton;
 
+#[derive(Component)]
+pub struct LeaderboardContentArea;
+
 
 pub(crate) fn plugin(app: &mut App) {
     app
@@ -57,6 +63,9 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<SessionTime>()
         .init_resource::<PlayerProfile>()
         .init_resource::<ResetTarget>()
+        .init_resource::<Leaderboard>()
+        .init_resource::<LeaderboardChannel>()
+        .init_resource::<FirebaseConfig>()
         .add_message::<ScoreMessage>()
         .register_type::<Score>()
         .register_type::<PlanetSettings>()
@@ -64,8 +73,8 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<Leaderboard>()
         .register_type::<Leaderboard>()
         .add_systems(Startup, (setup_planet, build_adjacency).chain())
-        .add_systems(OnEnter(GameState::MainMenu), setup_main_menu)
-        .add_systems(Update, (ui_button_hover_system, (main_menu_system, leaderboard_scroll_system, username_typing_system, toggle_ime_system).run_if(in_state(GameState::MainMenu))))
+        .add_systems(OnEnter(GameState::MainMenu), (setup_main_menu, trigger_leaderboard_fetch))
+        .add_systems(Update, (ui_button_hover_system, (main_menu_system, leaderboard_scroll_system, username_typing_system, toggle_ime_system, leaderboard_receiver_system, update_leaderboard_ui_system).run_if(in_state(GameState::MainMenu))))
         .add_systems(OnExit(GameState::MainMenu), cleanup_main_menu)
         .add_systems(OnEnter(GameState::Playing), (
             spawn_session_objects, 
@@ -933,6 +942,7 @@ fn death_menu_interaction_system(
     score: Res<Score>,
     time: Res<SessionTime>,
     mut profile: ResMut<PlayerProfile>,
+    config: Res<FirebaseConfig>,
     q_restart: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>,
     q_menu: Query<&Interaction, (Changed<Interaction>, With<MainMenuButton>)>,
     q_submit: Query<(Entity, &Interaction), (Changed<Interaction>, With<SubmitScoreButton>)>,
@@ -948,21 +958,30 @@ fn death_menu_interaction_system(
         next_state.set(GameState::Resetting);
     }
 
-    if let Ok((entity, Interaction::Pressed)) = q_submit.single() {
+    if let Ok((btn_entity, Interaction::Pressed)) = q_submit.single() {
+        let entry = FirebaseEntry {
+            name: profile.username.clone(),
+            score: score.current,
+            time: time.elapsed,
+        };
 
-        // Add to local leaderboard
-        leaderboard.entries.push((
-            profile.username.clone(), 
-            score.current, 
-            time.elapsed
-        ));
+        let url = format!("{}leaderboard.json", config.url);
+        let json = serde_json::to_string(&entry).unwrap();
+        let request = ehttp::Request::post(url, json.into_bytes());
 
-        profile.username = String::new();
+        ehttp::fetch(request, |result| {
+            if let Ok(resp) = result {
+                if resp.status == 200 { println!("Score accepted by Firebase!"); }
+            }
+        });
 
+        leaderboard.entries.push((profile.username.clone(), score.current, time.elapsed));
         leaderboard.entries.sort_by(|a, b| b.1.cmp(&a.1));
-
-        commands.entity(entity).despawn();
-
+        
+        profile.username = String::new();
+        if let Ok(mut entity_cmds) = commands.get_entity(btn_entity) {
+            entity_cmds.despawn();
+        }
     }
 }
 
@@ -1125,7 +1144,7 @@ fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
                     ..default()
                 },
                 BorderRadius::all(Val::Px(5.0)),
-                BackgroundColor(Color::srgb(0.1, 0.1, 0.1).into()),
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 1.0)),
             ))
             .with_children(|p| {
                 p.spawn((
@@ -1153,13 +1172,14 @@ fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
                 justify_content: JustifyContent::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.95)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.98)),
             Visibility::Hidden,
         ))
         .with_children(|overlay| {
             overlay.spawn((
                 Node {
-                    width: Val::Px(500.0),
+                    width: Val::Px(600.0),
+                    height: Val::Px(550.0),
                     padding: UiRect::all(Val::Px(30.0)),
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
@@ -1173,31 +1193,64 @@ fn setup_main_menu(mut commands: Commands, leaderboard: Res<Leaderboard>) {
                 box_node.spawn((
                     Text::new("TOP SURVIVORS"),
                     TextFont { font_size: 32.0, ..default() },
-                    TextColor(Color::from(YELLOW))
+                    TextColor(Color::from(YELLOW)),
+                    Node { margin: UiRect::bottom(Val::Px(20.0)), ..default() }
                 ));
 
-                for (name, score, time) in &leaderboard.entries {
-                    box_node.spawn(Node {
-                        display: Display::Flex,
-                        justify_content: JustifyContent::SpaceBetween,
-                        width: Val::Percent(100.0),
-                        margin: UiRect::vertical(Val::Px(5.0)),
-                        ..default()
-                    })
-                    .with_children(|row| {
-                        row.spawn((Text::new(name.clone()), TextColor(Color::WHITE)));
-                        let mins = (*time / 60.0) as u32; 
-                        let secs = (*time % 60.0) as u32;
-                        row.spawn((
-                            Text::new(format!("{} [{:02}:{:02}]", score, mins, secs)), 
-                            TextColor(Color::from(LIGHT_CYAN))
-                        ));
+                box_node.spawn(Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(300.0),
+                    overflow: Overflow::clip_y(),
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                })
+                .with_children(|viewport| {
+                    viewport.spawn((
+                        LeaderboardContentArea,
+                        LeaderboardList,
+                        Node {
+                            display: Display::Flex,
+                            flex_direction: FlexDirection::Column,
+                            width: Val::Percent(100.0),
+                            position_type: PositionType::Relative,
+                            ..default()
+                        },
+                    ))
+                    .with_children(|list| {
+                        for (name, score, time) in &leaderboard.entries {
+                            spawn_leaderboard_row(list, name, *score, *time);
+                        }
                     });
-                }
+                });
 
                 spawn_menu_button(box_node, CloseLeaderboardButton, "BACK", Color::srgb(0.3, 0.3, 0.3));
             });
         });
+    });
+}
+
+fn spawn_leaderboard_row(parent: &mut ChildSpawnerCommands, name: &str, score: usize, time: f32) {
+    parent.spawn((
+        Node {
+            display: Display::Flex,
+            justify_content: JustifyContent::SpaceBetween,
+            width: Val::Percent(100.0),
+            padding: UiRect::all(Val::Px(10.0)),
+            border: UiRect::bottom(Val::Px(1.0)),
+            ..default()
+        },
+        BorderColor::from(BLACK),
+    ))
+    .with_children(|row| {
+        row.spawn((Text::new(name.to_string()), TextColor(Color::WHITE)));
+        
+        let mins = (time / 60.0) as u32; 
+        let secs = (time % 60.0) as u32;
+        row.spawn((
+            Text::new(format!("{} [{:02}:{:02}]", score, mins, secs)), 
+            TextColor(Color::from(LIGHT_CYAN))
+        ));
     });
 }
 
@@ -1522,4 +1575,113 @@ fn toggle_ime_system(
         window.ime_position = Vec2::new(window.width() / 2.0, window.height() / 2.0);
         
     }
+}
+
+fn trigger_leaderboard_fetch(config: Res<FirebaseConfig>, channel: Res<LeaderboardChannel>) {
+    let tx = channel.tx.clone();
+    let url = format!("{}leaderboard.json?orderBy=\"score\"&limitToLast=10", config.url);
+    
+    let request = ehttp::Request::get(url);
+
+    ehttp::fetch(request, move |result| {
+        match result {
+            Ok(response) => {
+                if response.status == 200 {
+                    let raw_json: serde_json::Value = serde_json::from_slice(&response.bytes).unwrap_or_default();
+                    
+                    if raw_json.is_null() {
+                        println!("FIREBASE: Database is empty.");
+                        return;
+                    }
+
+                    if let Some(obj) = raw_json.as_object() {
+                        let mut entries = Vec::new();
+                        for (_id, val) in obj {
+                            if let (Some(name), Some(score), Some(time)) = (
+                                val.get("name").and_then(|v| v.as_str()),
+                                val.get("score").and_then(|v| v.as_u64()),
+                                val.get("time").and_then(|v| v.as_f64()),
+                            ) {
+                                entries.push((name.to_string(), score as usize, time as f32));
+                            }
+                        }
+
+                        entries.sort_by(|a, b| b.1.cmp(&a.1));
+                        
+                        let _ = tx.send(entries);
+                        println!("FIREBASE: Successfully parsed {} entries", obj.len());
+                    }
+                } else {
+                    println!("FIREBASE FETCH ERROR: Status {}", response.status);
+                }
+            }
+            Err(e) => println!("NETWORK ERROR: {}", e),
+        }
+    });
+}
+
+fn leaderboard_receiver_system(
+    channel: Res<LeaderboardChannel>,
+    mut leaderboard: ResMut<Leaderboard>,
+) {
+    let new_data = if let Ok(rx) = channel.rx.lock() {
+        rx.try_recv().ok()
+    } else {
+        None
+    };
+
+    if let Some(new_entries) = new_data {
+        leaderboard.entries = new_entries;
+        println!("LOCAL: Leaderboard resource updated with fresh data!");
+    }
+}
+
+fn update_leaderboard_ui_system(
+    mut commands: Commands,
+    leaderboard: Res<Leaderboard>,
+    q_container: Query<Entity, With<LeaderboardContentArea>>,
+) {
+    if !leaderboard.is_changed() { return; }
+    let Ok(container_entity) = q_container.single() else { return; };
+
+    commands.entity(container_entity).despawn_children();
+
+    commands.entity(container_entity).with_children(|parent| {
+        if leaderboard.entries.is_empty() {
+            parent.spawn((
+                Text::new("NO SCORES YET..."),
+                TextFont { font_size: 20.0, ..default() },
+                TextColor(Color::from(bevy::color::palettes::css::GRAY)),
+            ));
+        }
+
+        for (name, score, time_val) in &leaderboard.entries {
+            parent.spawn((
+                Node {
+                    display: Display::Flex,
+                    justify_content: JustifyContent::SpaceBetween,
+                    width: Val::Percent(100.0),
+                    padding: UiRect::all(Val::Px(10.0)),
+                    border: UiRect::bottom(Val::Px(1.0)),
+                    ..default()
+                },
+                BorderColor::from(bevy::color::palettes::css::BLACK),
+            ))
+            .with_children(|row| {
+                row.spawn((
+                    Text::new(name.clone()), 
+                    TextFont { font_size: 18.0, ..default() },
+                    TextColor(Color::WHITE)
+                ));
+                
+                let mins = (*time_val / 60.0) as u32;
+                let secs = (*time_val % 60.0) as u32;
+                row.spawn((
+                    Text::new(format!("{} [{:02}:{:02}]", score, mins, secs)), 
+                    TextFont { font_size: 18.0, ..default() },
+                    TextColor(Color::from(bevy::color::palettes::css::LIGHT_CYAN))
+                ));
+            });
+        }
+    });
 }
