@@ -44,3 +44,9 @@ pub struct LeaderboardList;
 
 #[derive(Component)]
 pub struct FactoryNotificationText;
+
+#[derive(Component)]
+pub struct UsernameInputText;
+
+#[derive(Component)]
+pub struct SubmitScoreButton;

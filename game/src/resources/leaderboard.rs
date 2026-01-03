@@ -1,20 +1,15 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
-#[derive(Resource, Reflect, Debug)]
+#[derive(Resource, Reflect, Debug, Default)]
 #[reflect(Resource)]
 pub struct Leaderboard {
-    pub entries: Vec<(String, usize)>,
+    pub entries: Vec<(String, usize, f32)>,
 }
 
-// TODO: implement firebase
-impl Default for Leaderboard {
-    fn default() -> Self {
-        Self {
-            entries: vec![
-                ("MossMaster".to_string(), 50000),
-                ("GreenKing".to_string(), 35000),
-                ("PlanetSaver".to_string(), 12000),
-            ],
-        }
-    }
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FirebaseEntry {
+    pub name: String,
+    pub score: usize,
+    pub time: f32,
 }
