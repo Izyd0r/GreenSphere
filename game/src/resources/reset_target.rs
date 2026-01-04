@@ -1,6 +1,5 @@
 use bevy::prelude::*;
-
-use crate::plugins::game::GameState;
+use crate::prelude::*;
 
 #[derive(Resource)]
 pub struct ResetTarget(pub GameState);
