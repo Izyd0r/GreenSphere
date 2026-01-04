@@ -174,15 +174,24 @@ fn spawn_session_objects(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
     settings: Res<PlanetSettings>,
     q_pivot: Query<Entity, With<PlanetPivot>>,
 ) {
     let Ok(pivot_entity) = q_pivot.single() else { return; };
 
+    let ball_material = materials.add(StandardMaterial {
+        base_color_texture: Some(asset_server.load("textures/moss_ball.png")),
+        base_color: Color::WHITE,
+        alpha_mode: AlphaMode::Blend, 
+        perceptual_roughness: 0.8,
+        ..default()
+    });
+
     let ball_entity = commands.spawn((
         PlayerBall { current_velocity: Vec3::ZERO, hp: 100.0, invincibility_timer: 0.0 }, 
         Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(5).unwrap())),
-        MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.0, 1.0, 0.5), ..default() })),
+        MeshMaterial3d(ball_material),
         Transform::from_xyz(0.0, settings.radius + settings.player_radius, 0.0)
             .with_scale(Vec3::splat(settings.player_radius)),
     )).id();
@@ -355,14 +364,14 @@ fn sync_visuals(
 
         if let Some(mat) = materials.get_mut(mat_handle) {
             if player_logic.invincibility_timer > 0.0 {
-                let blink = (time.elapsed_secs() * 20.0).sin() > 0.0;
-                mat.base_color = if blink {
-                    Color::srgba(1.0, 1.0, 1.0, 0.2)
+                let blink = (time.elapsed_secs() * 30.0).sin() > 0.0;
+                if blink {
+                    mat.base_color = Color::srgba(2.0, 2.0, 2.0, 0.4); 
                 } else {
-                    Color::srgb(0.0, 1.0, 0.5)
-                };
+                    mat.base_color = Color::WHITE;
+                }
             } else {
-                mat.base_color = Color::srgb(0.0, 1.0, 0.5);
+                mat.base_color = Color::WHITE;
             }
         }
     }
@@ -370,7 +379,6 @@ fn sync_visuals(
     if let Ok(mut t) = q_cam.single_mut() {
         let dynamic_zoom = settings.camera_height + (settings.player_radius * 5.0);
         t.translation.y = settings.radius + dynamic_zoom;
-        
         let target = Vec3::new(0.0, settings.radius, 0.0);
         t.look_at(target, -Vec3::Z);
     }
@@ -787,9 +795,13 @@ fn player_invincibility_system(
     time: Res<Time>,
     mut q_player: Query<&mut PlayerBall>,
 ) {
-    let Ok(mut player) = q_player.single_mut() else { return; };
-    if player.invincibility_timer > 0.0 {
-        player.invincibility_timer = (player.invincibility_timer - time.delta_secs()).max(0.0);
+    for mut player in q_player.iter_mut() {
+        if player.invincibility_timer > 0.0 {
+            player.invincibility_timer -= time.delta_secs();
+            if player.invincibility_timer < 0.0 {
+                player.invincibility_timer = 0.0;
+            }
+        }
     }
 }
 
