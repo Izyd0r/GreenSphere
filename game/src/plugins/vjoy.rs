@@ -25,6 +25,8 @@ use crate::prelude::{
     dash_state::DashState
 };
 
+use crate::components::ui::*;
+
 /// Main entry point for the Virtual Joystick functionality.
 /// Call `.add_plugins(vjoy::plugin)` in your App setup.
 pub(crate) fn plugin(app: &mut App) {
@@ -197,6 +199,7 @@ pub fn spawn_dash_button(mut commands: Commands) {
 
     commands.spawn((
         DashButton,
+        SessionUi,
         Interaction::default(),
         Node {
             width: Val::VMin(15.0),
@@ -219,10 +222,22 @@ pub fn spawn_dash_button(mut commands: Commands) {
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 1.0, 1.0, 0.3)),
             BorderRadius::all(Val::Percent(50.0)),
+        ));
+
+        parent.spawn((
+            DashButtonText,
+            Text::new("DASH"),
+            TextFont { 
+                font_size: 20.0,
+                ..default() 
+            },
+            TextColor(Color::WHITE),
+            ZIndex(1),
         ));
     });
 }
@@ -273,4 +288,16 @@ fn dash_input_system(
     let energy_pct = state.current_energy / settings.max_energy;
     meter_node.width = Val::Percent(energy_pct * 100.0);
     meter_node.height = Val::Percent(energy_pct * 100.0);
+}
+
+pub fn sync_dash_text_size(
+    q_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut q_text: Query<&mut TextFont, With<DashButtonText>>,
+) {
+    let Ok(window) = q_window.single() else { return; };
+    let Ok(mut font) = q_text.single_mut() else { return; };
+
+    let vmin = window.width().min(window.height());
+
+    font.font_size = vmin * 0.035; 
 }

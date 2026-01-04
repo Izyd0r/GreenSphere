@@ -102,7 +102,9 @@ pub(crate) fn plugin(app: &mut App) {
 
             (track_session_time_system, update_time_hud_system),
 
-            (factory_director_system, notification_lifecycle_system)
+            (factory_director_system, notification_lifecycle_system),
+
+            (crate::plugins::vjoy::sync_dash_text_size)
         ).run_if(in_state(GameState::Playing)).run_if(any_with_component::<PlayerBall>))
         .add_systems(OnEnter(GameState::GameOver), (setup_death_menu, cleanup_game_ui))
         .add_systems(Update, death_menu_interaction_system.run_if(in_state(GameState::GameOver)))
