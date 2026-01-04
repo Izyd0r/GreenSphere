@@ -53,3 +53,12 @@ pub struct SubmitScoreButton;
 
 #[derive(Component)]
 pub struct DashButtonText;
+
+#[derive(Component)]
+pub struct MainMenuRoot;
+
+#[derive(Component)]
+pub struct StartButton;
+
+#[derive(Component)]
+pub struct LeaderboardContentArea;
