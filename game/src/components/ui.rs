@@ -50,3 +50,6 @@ pub struct UsernameInputText;
 
 #[derive(Component)]
 pub struct SubmitScoreButton;
+
+#[derive(Component)]
+pub struct DashButtonText;
