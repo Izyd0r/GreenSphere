@@ -5,3 +5,4 @@ pub(super) mod defaults;
 pub(super) mod vjoy;
 pub(super) mod menu;
 pub(super) mod hud;
+pub(super) mod player;

@@ -24,6 +24,7 @@ impl Plugin for AppPlugin {
             plugins::game::plugin,
             plugins::menu::plugin,
             plugins::hud::plugin,
+            plugins::player::plugin,
             plugins::vjoy::plugin,
         ));
         #[cfg(feature="dev")]

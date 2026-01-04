@@ -17,10 +17,12 @@ pub(crate) fn plugin(app: &mut App) {
         use crate::resources::vjoy_config::VjoyConfig;
         use crate::resources::vjoy_output::VjoyOutput;
         use crate::resources::enemy_settings::EnemySettings;
+        use crate::prelude::player_settings::{PlayerSettings, *};
         
         app.add_plugins(EguiPlugin::default());
         
         app.add_plugins(ResourceInspectorPlugin::<PlanetSettings>::default());
+        app.add_plugins(ResourceInspectorPlugin::<PlayerSettings>::default());
         app.add_plugins(ResourceInspectorPlugin::<EnemySettings>::default());
         
         app.add_plugins(ResourceInspectorPlugin::<VjoyConfig>::default());
