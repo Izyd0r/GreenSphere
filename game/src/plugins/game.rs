@@ -114,6 +114,7 @@ fn setup_planet(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
     settings: Res<PlanetSettings>,
 ) {
     commands.spawn((
@@ -125,8 +126,18 @@ fn setup_planet(
     mesh.duplicate_vertices();
     mesh.compute_flat_normals();
     let vertex_count = mesh.count_vertices();
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.15, 0.15, 0.15, 1.0]; vertex_count]);
+
+    let mut uvs = vec![[0.0, 0.0]; vertex_count];
+    for i in (0..vertex_count).step_by(3) {
+        uvs[i]     = [0.0, 0.0];
+        uvs[i + 1] = [0.5, 0.0];
+        uvs[i + 2] = [0.25, 0.5];
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    
     mesh.asset_usage = bevy::asset::RenderAssetUsages::default();
+
+    let atlas_handle = asset_server.load("textures/tiles.png");
 
     commands.spawn((
         Planet,
@@ -135,7 +146,11 @@ fn setup_planet(
             adjacency: Vec::new(), 
         },
         Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::WHITE, ..default() })),
+        MeshMaterial3d(materials.add(StandardMaterial { 
+            base_color_texture: Some(atlas_handle),
+            perceptual_roughness: 0.9,
+            ..default() 
+        })),
         Transform::from_scale(Vec3::splat(settings.radius)),
     ));
 
@@ -290,40 +305,33 @@ fn tile_restoration_system(
     q_player: Query<&GlobalTransform, With<PlayerBall>>,
     mut q_planet: Query<(&Transform, &Mesh3d, &mut PlanetData), With<Planet>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut score_msg: MessageWriter<ScoreMessage>
+    mut score_msg: MessageWriter<ScoreMessage>,
 ) {
     let Ok(player_gtrans) = q_player.single() else { return; };
     let Ok((planet_trans, mesh_handle, mut planet_data)) = q_planet.single_mut() else { return; };
     let Some(mesh) = meshes.get_mut(mesh_handle) else { return; };
 
-    let player_world_pos = player_gtrans.translation();
-    let player_rel_pos = player_world_pos - planet_trans.translation;
-    let local_player_pos = player_rel_pos / settings.radius;
-    
-    let brush_size = (settings.player_radius * 1.5) / settings.radius;
-    let brush_sq = brush_size * brush_size;
+    let player_rel_pos = (player_gtrans.translation() - planet_trans.translation) / settings.radius;
+    let brush_sq = ((settings.player_radius * 1.2) / settings.radius).powi(2);
 
     let Some(bevy::mesh::VertexAttributeValues::Float32x3(v_pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { return; };
     let v_pos_local = v_pos.clone(); 
 
-    if let Some(bevy::mesh::VertexAttributeValues::Float32x4(v_col)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x2(v_uv)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
         for i in 0..v_pos_local.len() {
             if planet_data.vertex_states[i] == TileState::Healthy { continue; }
             let v = Vec3::from(v_pos_local[i]);
-            if (v.x - local_player_pos.x).abs() > brush_size { continue; }
+            if (v.x - player_rel_pos.x).abs() > 0.1 { continue; }
             
-            if v.distance_squared(local_player_pos) < brush_sq {
-                let points = match planet_data.vertex_states[i] {
-                    TileState::Wasteland => 100,
-                    TileState::Polluted => 200,
-                    _ => 0,
-                };
+            if v.distance_squared(player_rel_pos) < brush_sq {
+                let points = if planet_data.vertex_states[i] == TileState::Polluted { 200 } else { 100 };
+                planet_data.vertex_states[i] = TileState::Healthy;
+                score_msg.write(ScoreMessage(points));
 
-                if points > 0 {
-                    planet_data.vertex_states[i] = TileState::Healthy;
-                    v_col[i] = [0.0, 1.0, 0.4, 1.0];
-                    score_msg.write(ScoreMessage(points));
-                }
+                let tri_start = (i / 3) * 3;
+                v_uv[tri_start]     = [0.5, 0.0];
+                v_uv[tri_start + 1] = [1.0, 0.0];
+                v_uv[tri_start + 2] = [0.75, 0.5];
             }
         }
     }
@@ -380,25 +388,24 @@ fn spawn_factories(
     let factory_texture = asset_server.load("textures/factory.png");
     let factory_height = 12.0;
 
-
     let material_factory = materials.add(StandardMaterial {
         base_color_texture: Some(factory_texture),
         alpha_mode: AlphaMode::Mask(0.5), 
-        unlit: true, 
-        cull_mode: None, 
+        unlit: true,
+        cull_mode: None,
         ..default()
     });
     let mesh_2d = meshes.add(Rectangle::new(12.0, factory_height));
 
-    let mut rng = rand::rng();
     let Ok((mut planet_data, mesh_handle, planet_transform)) = q_planet.single_mut() else { return; };
-    
     let Some(mesh) = meshes.get_mut(mesh_handle) else { return; };
+    let mut rng = rand::rng();
 
     for _ in 0..enemy_settings.factory_count {
         let theta = rng.random_range(0.0..std::f32::consts::TAU);
         let phi = (rng.random_range(-1.0..1.0) as f32).acos();
-        let normal = Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos());
+        let normal = Vec3::new(phi.sin() * theta.cos(), phi.cos(), phi.sin() * theta.sin());
+        
         let offset_height = factory_height / 2.0;
         let spawn_pos = normal * (settings.radius + offset_height);
 
@@ -411,6 +418,7 @@ fn spawn_factories(
             MeshMaterial3d(material_factory.clone()),
             Transform::from_translation(spawn_pos)
                 .looking_at(spawn_pos + normal, Vec3::Y), 
+            SessionUi,
         ));
 
         let stain_pos = normal * settings.radius;
@@ -419,7 +427,6 @@ fn spawn_factories(
             mesh, 
             stain_pos - planet_transform.translation, 
             enemy_settings.pollution_radius / settings.radius,
-            enemy_settings.pollution_color
         );
     }
 }
@@ -429,22 +436,26 @@ fn pollute_area(
     mesh: &mut Mesh,
     local_pos: Vec3,
     radius_normalized: f32,
-    color: [f32; 4]
 ) {
     let radius_sq = radius_normalized * radius_normalized;
-    let Some(bevy::mesh::VertexAttributeValues::Float32x3(v_pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { return; };
-    let v_pos = v_pos.clone();
+    let Some(bevy::mesh::VertexAttributeValues::Float32x3(v_pos_attr)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { return; };
+    let v_pos = v_pos_attr.clone();
 
-    if let Some(bevy::mesh::VertexAttributeValues::Float32x4(v_col)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x2(v_uv)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
         for i in 0..v_pos.len() {
             let v = Vec3::from(v_pos[i]);
             if v.distance_squared(local_pos.normalize()) < radius_sq {
                 data.vertex_states[i] = TileState::Polluted;
-                v_col[i] = color;
+                
+                let tri_start = (i / 3) * 3;
+                v_uv[tri_start]     = [0.0, 0.5];
+                v_uv[tri_start + 1] = [0.5, 0.5];
+                v_uv[tri_start + 2] = [0.25, 1.0];
             }
         }
     }
 }
+
 
 fn pollution_lifecycle_system(
     time: Res<Time>,
@@ -475,7 +486,6 @@ fn pollution_lifecycle_system(
     for &f_pos in &factory_positions {
         let mut factory_has_pollution = false;
         let mut root_vertices = Vec::new();
-
         for (idx, v) in v_pos_attr.iter().enumerate() {
             let world_v_pos = Vec3::from(*v) * settings.radius;
             if f_pos.distance_squared(world_v_pos) < root_radius_sq {
@@ -486,66 +496,56 @@ fn pollution_lifecycle_system(
                 }
             }
         }
-
         if !factory_has_pollution && !root_vertices.is_empty() {
             if rand::random::<f32>() < 0.2 {
                 for &idx in &root_vertices {
                     to_infect.insert(idx);
-                    for &sibling in &planet_data.adjacency[idx] {
-                        to_infect.insert(sibling);
-                    }
+                    for &sibling in &planet_data.adjacency[idx] { to_infect.insert(sibling); }
                 }
             }
         }
     }
 
-    let mut active_indices = std::collections::VecDeque::new();
     let mut is_active = vec![false; planet_data.vertex_states.len()];
-
+    let mut active_queue = std::collections::VecDeque::new();
     for (idx, state) in planet_data.vertex_states.iter().enumerate() {
         if *state == TileState::Polluted {
             let world_v_pos = Vec3::from(v_pos_attr[idx]) * settings.radius;
-            if factory_positions.iter().any(|f_pos| f_pos.distance_squared(world_v_pos) < connect_radius_sq) {
+            if factory_positions.iter().any(|f| f.distance_squared(world_v_pos) < connect_radius_sq) {
                 is_active[idx] = true;
-                active_indices.push_back(idx);
+                active_queue.push_back(idx);
             }
         }
     }
-
-    while let Some(current) = active_indices.pop_front() {
-        for &neighbor in &planet_data.adjacency[current] {
-            if !is_active[neighbor] && planet_data.vertex_states[neighbor] == TileState::Polluted {
-                is_active[neighbor] = true;
-                active_indices.push_back(neighbor);
+    while let Some(curr) = active_queue.pop_front() {
+        for &n in &planet_data.adjacency[curr] {
+            if !is_active[n] && planet_data.vertex_states[n] == TileState::Polluted {
+                is_active[n] = true;
+                active_queue.push_back(n);
             }
         }
     }
 
     for (idx, active) in is_active.iter().enumerate() {
         if !*active { continue; }
-
-        let candidates: Vec<&usize> = planet_data.adjacency[idx].iter()
-            .filter(|&&n| planet_data.vertex_states[n] != TileState::Polluted)
-            .collect();
-
-        if candidates.is_empty() { continue; }
-        
-        let &target_idx = candidates[rng.random_range(0..candidates.len())];
-
+        let neighbors = &planet_data.adjacency[idx];
+        let targets: Vec<&usize> = neighbors.iter().filter(|&&n| planet_data.vertex_states[n] != TileState::Polluted).collect();
+        if targets.is_empty() { continue; }
+        let &target_idx = targets[rng.random_range(0..targets.len())];
         if rand::random::<f32>() < enemy_settings.natural_spread_chance {
             to_infect.insert(target_idx);
-            for &sibling in &planet_data.adjacency[target_idx] {
-                to_infect.insert(sibling);
-            }
+            for &sibling in &planet_data.adjacency[target_idx] { to_infect.insert(sibling); }
         }
     }
 
-    if !to_infect.is_empty() {
-        if let Some(bevy::mesh::VertexAttributeValues::Float32x4(v_col)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
-            for idx in to_infect {
-                planet_data.vertex_states[idx] = TileState::Polluted;
-                v_col[idx] = enemy_settings.pollution_color;
-            }
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x2(v_uv)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
+        for idx in to_infect {
+            planet_data.vertex_states[idx] = TileState::Polluted;
+            
+            let tri_start = (idx / 3) * 3;
+            v_uv[tri_start]     = [0.0, 0.5];
+            v_uv[tri_start + 1] = [0.5, 0.5];
+            v_uv[tri_start + 2] = [0.25, 1.0];
         }
     }
 }
@@ -996,7 +996,7 @@ fn world_reset_system(
     mut commands: Commands,
     mut next_state: ResMut<NextState<GameState>>,
     reset_target: Res<ResetTarget>,
-    q_cleanup: Query<Entity, Or<(With<PlayerBall>, With<AlienFactory>, With<AlienMachine>, With<EnergyOrb>)>>,
+    q_cleanup: Query<Entity, Or<(With<PlayerBall>, With<AlienFactory>, With<AlienMachine>, With<EnergyOrb>, With<SessionUi>)>>,
     mut q_planet: Query<(&mut PlanetData, &Mesh3d), With<Planet>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut dash_state: ResMut<DashState>,
@@ -1004,20 +1004,28 @@ fn world_reset_system(
     mut time: ResMut<SessionTime>,
 ) {
     for entity in q_cleanup.iter() {
-        commands.entity(entity).despawn_children();
-        commands.entity(entity).despawn();
+        if let Ok(mut entity_cmds) = commands.get_entity(entity) {
+            entity_cmds.despawn_children();
+            entity_cmds.despawn();
+        }
     }
 
     if let Ok((mut planet_data, mesh_handle)) = q_planet.single_mut() {
         planet_data.vertex_states.fill(TileState::Wasteland);
+
         if let Some(mesh) = meshes.get_mut(mesh_handle) {
-            if let Some(bevy::mesh::VertexAttributeValues::Float32x4(v_col)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
-                v_col.fill([0.15, 0.15, 0.15, 1.0]);
+            if let Some(bevy::mesh::VertexAttributeValues::Float32x2(v_uv)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
+                for i in (0..v_uv.len()).step_by(3) {
+                    v_uv[i]     = [0.0, 0.0];
+                    v_uv[i + 1] = [0.5, 0.0];
+                    v_uv[i + 2] = [0.25, 0.5];
+                }
             }
         }
     }
 
     *dash_state = DashState::default();
+    dash_state.current_energy = 100.0;
     score.current = 0;
     time.elapsed = 0.0;
 
@@ -1406,6 +1414,7 @@ fn factory_director_system(
     mut local_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
 ) {
     let dt = time.delta_secs();
+    
     enemy_settings.difficulty_scale += enemy_settings.difficulty_growth_rate * dt;
     let current_diff = enemy_settings.difficulty_scale;
 
@@ -1442,12 +1451,17 @@ fn factory_director_system(
             Transform::from_translation(spawn_pos).looking_at(spawn_pos + normal, Vec3::Y),
             Visibility::Inherited,
             InheritedVisibility::default(),
+            SessionUi,
         ));
 
         if let Ok((mut planet_data, mesh_handle, planet_transform)) = q_planet.single_mut() {
             if let Some(mesh) = meshes.get_mut(mesh_handle) {
-                pollute_area(&mut planet_data, mesh, spawn_pos - planet_transform.translation, 
-                             enemy_settings.pollution_radius / settings.radius, enemy_settings.pollution_color);
+                pollute_area(
+                    &mut planet_data, 
+                    mesh, 
+                    spawn_pos - planet_transform.translation, 
+                    enemy_settings.pollution_radius / settings.radius,
+                );
             }
         }
         
