@@ -18,3 +18,9 @@ dotenvy = "0.15.7"
 [features]
 default = []
 dev = ["dep:bevy-inspector-egui", "dep:bevy_egui"]
+
+[profile.release]
+opt-level = "z"
+panic = "abort"
+strip = "symbols"
+lto = "thin"
