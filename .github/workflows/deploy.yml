@@ -8,9 +8,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,17 +32,22 @@ jobs:
 
       - name: Install wasm-opt
         run: |
-          sudo apt-get update && sudo apt-get install -y binaryen
+          sudo apt-get update
+          sudo apt-get install -y binaryen
+
+      - name: Clean dist
+        working-directory: game
+        run: rm -rf dist
 
       - name: Build with Trunk
-        working-directory: game 
-        run: trunk build --release
+        working-directory: game
+        run: trunk build --release --public-url /GreenSphere/
         env:
           FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: game/dist 
           branch: gh-pages
+          folder: game/dist
           clean: true
