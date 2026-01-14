@@ -1,0 +1,42 @@
+name: deploy
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch: 
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Download and install Trunk
+        run: |
+          wget -qO- https://github.com/trunk-rs/trunk/releases/download/v0.19.1/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xzf-
+          sudo mv trunk /usr/local/bin/
+
+      - name: Install wasm-opt (Optimizes binary size)
+        run: |
+          sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Build with Trunk
+        run: trunk build --release
+        env:
+          FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
+
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: dist
+          branch: gh-pages
+          clean: true

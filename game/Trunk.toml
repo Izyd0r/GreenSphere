@@ -3,7 +3,7 @@ target = "index.html"
 dist = "dist"
 
 [workflow]
-public_url = "./" 
+public_url = "/greensphere/"
 
 [serve]
 port = 8080
