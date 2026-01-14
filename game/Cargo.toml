@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = "0.17.3"
+bevy = { version = "0.17.3", features = ["default", "webgl2"] }
 bevy-inspector-egui = { version = "0.35.0", optional = true }
 bevy_egui = { version = "0.38.1", optional = true }
 ehttp = "0.6.0"

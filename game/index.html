@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>GreenSphere</title>
+    <style>
+        body { 
+            margin: 0; 
+            background: rgb(102, 102, 102); 
+            overflow: hidden; 
+            height: 100vh; 
+            width: 100vw;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            touch-action: none; 
+        }
+        canvas { 
+            width: 100% !important; 
+            height: 100% !important; 
+            image-rendering: pixelated; 
+            image-rendering: crisp-edges;
+            outline: none;
+        }
+    </style>
+    <link data-trunk rel="copy-dir" href="assets"/>
+</head>
+<body>
+    <canvas id="bevy"></canvas>
+</body>
+</html>

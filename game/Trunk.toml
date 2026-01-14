@@ -1,0 +1,10 @@
+[build]
+target = "index.html"
+dist = "dist"
+
+[workflow]
+public_url = "./" 
+
+[serve]
+port = 8080
+open = true
