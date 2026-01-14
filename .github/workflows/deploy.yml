@@ -2,7 +2,7 @@ name: deploy
 
 on:
   push:
-    branches: [dev]
+    branches: [feat/wasm]
   workflow_dispatch: 
 
 permissions:
