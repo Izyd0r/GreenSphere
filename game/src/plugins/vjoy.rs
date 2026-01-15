@@ -15,7 +15,6 @@ use bevy::ui::RelativeCursorPosition;
 
 use crate::prelude::{
     active_touch::ActiveTouch, 
-    dash_touch::DashTouch,
     vjoy_base::VjoyBase, 
     vjoy_knob::VjoyKnob, 
     vjoy_output::VjoyOutput,
@@ -37,7 +36,6 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<ActiveTouch>()
         .init_resource::<DashState>()
         .init_resource::<DashSettings>()
-        .init_resource::<DashTouch>()
         .register_type::<VjoyConfig>()
         .register_type::<VjoyOutput>()
         .register_type::<DashState>()
@@ -104,72 +102,44 @@ fn joystick_input_system(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     touches: Res<Touches>,
     config: Res<VjoyConfig>,
-    q_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    q_base: Query<(&GlobalTransform, &ComputedNode, &RelativeCursorPosition), With<VjoyBase>>,
+    mut q_base: Query<(&Interaction, &RelativeCursorPosition, &mut VjoyBase, &ComputedNode)>,
     mut vjoy_output: ResMut<VjoyOutput>,
     mut active_touch: ResMut<ActiveTouch>,
 ) {
-    let Ok((transform, node, relative_cursor)) = q_base.single() else { return; };
-    let Ok(window) = q_window.single() else { return; };
+    let Ok((interaction, relative_cursor, mut base_info, computed_node)) = q_base.single_mut() else { return; };
 
-    let base_pos = transform.translation().truncate();
-    let base_size = node.size();
-    let radius = base_size.x * 0.5;
+    let actual_radius = computed_node.size().x / 2.0;
+    base_info.radius = actual_radius;
 
     if active_touch.id.is_none() {
-        if mouse_buttons.just_pressed(MouseButton::Left) && relative_cursor.cursor_over() {
+        if *interaction == Interaction::Pressed {
             active_touch.id = Some(u64::MAX);
         }
         for touch in touches.iter_just_pressed() {
-            let touch_pos = Vec2::new(touch.position().x, window.height() - touch.position().y);
-            if touch_pos.distance(base_pos) <= radius {
+            if relative_cursor.cursor_over() {
                 active_touch.id = Some(touch.id());
-                break;
             }
         }
     }
 
-    let mut released = false;
-    let mut current_normalized: Option<Vec2> = None;
-
+    let mut input_released = false;
     if let Some(id) = active_touch.id {
         if id == u64::MAX {
-            if mouse_buttons.pressed(MouseButton::Left) {
-                if let Some(cursor_pos) = window.cursor_position() {
-                    let ui_pos = Vec2::new(cursor_pos.x, window.height() - cursor_pos.y);
-                    let delta = ui_pos - base_pos;
-                    let norm_x = (delta.x / base_size.x) + 0.5;
-                    let norm_y = (delta.y / base_size.y) + 0.5;
-                    current_normalized = Some(Vec2::new(norm_x, 1.0 - norm_y));
-                }
-            } else {
-                released = true;
-            }
-        } else {
-            if let Some(touch) = touches.get_pressed(id) {
-                let touch_pos = Vec2::new(touch.position().x, window.height() - touch.position().y);
-                let delta = touch_pos - base_pos;
-                let norm_x = (delta.x / base_size.x) + 0.5;
-                let norm_y = (delta.y / base_size.y) + 0.5;
-                current_normalized = Some(Vec2::new(norm_x, 1.0 - norm_y));
-            } else {
-                released = true;
+            if !mouse_buttons.pressed(MouseButton::Left) { input_released = true; }
+        } else if touches.get_released(id).is_some() {
+            input_released = true;
+        }
+
+        if !input_released {
+            if let Some(pos) = relative_cursor.normalized {
+                let joystick_vec = Vec2::new(pos.x * config.sensitivity, -pos.y * config.sensitivity);
+                vjoy_output.dir = joystick_vec.clamp(Vec2::splat(-1.0), Vec2::splat(1.0));
+                if vjoy_output.dir.length() < config.deadzone { vjoy_output.dir = Vec2::ZERO; }
             }
         }
     }
 
-    if let Some(pos) = current_normalized {
-        let joystick_vec = Vec2::new(
-            (pos.x - 0.5) * 2.0 * config.sensitivity,
-            (pos.y - 0.5) * -2.0 * config.sensitivity
-        );
-        vjoy_output.dir = joystick_vec.clamp_length_max(1.0);
-        if vjoy_output.dir.length() < config.deadzone {
-            vjoy_output.dir = Vec2::ZERO;
-        }
-    }
-
-    if released {
+    if input_released {
         active_touch.id = None;
         vjoy_output.dir = Vec2::ZERO;
     }
@@ -275,72 +245,42 @@ pub fn spawn_dash_button(mut commands: Commands) {
 fn dash_input_system(
     time: Res<Time>,
     settings: Res<DashSettings>,
-    touches: Res<Touches>,
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
-    q_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut state: ResMut<DashState>,
-    mut dash_touch: ResMut<DashTouch>,
-    q_button: Query<(&GlobalTransform, &ComputedNode, &Interaction), With<DashButton>>,
-    mut q_button_bg: Query<&mut BackgroundColor, (With<DashButton>, Without<DashMeter>)>,
+    mut q_button: Query<(&Interaction, &mut BackgroundColor), (With<DashButton>, Without<DashMeter>)>,
     mut q_meter: Query<(&mut Node, &mut BackgroundColor), (With<DashMeter>, Without<DashButton>)>,
 ) {
     let dt = time.delta_secs();
-    let Ok((transform, node, interaction)) = q_button.single() else { return; };
-    let Ok(mut btn_bg) = q_button_bg.single_mut() else { return; };
+    
+    let Ok((interaction, mut btn_bg)) = q_button.single_mut() else { return; };
     let Ok((mut meter_node, mut meter_bg)) = q_meter.single_mut() else { return; };
-    let Ok(window) = q_window.single() else { return; };
-
-    let pos = transform.translation().truncate();
-    let size = node.size();
 
     state.current_energy = (state.current_energy + settings.regen_rate * dt).min(settings.max_energy);
     state.cooldown_timer = (state.cooldown_timer - dt).max(0.0);
+
     if state.duration_timer > 0.0 {
         state.duration_timer -= dt;
-        if state.duration_timer <= 0.0 { state.is_active = false; }
+        if state.duration_timer <= 0.0 {
+            state.is_active = false; 
+        }
     }
 
     let is_ready = state.current_energy >= settings.max_energy && state.cooldown_timer <= 0.0;
 
-    let mut is_pressed = false;
-
-    if mouse_buttons.pressed(MouseButton::Left) && *interaction == Interaction::Pressed {
-        is_pressed = true;
-    }
-
-    if dash_touch.id.is_none() {
-        for touch in touches.iter_just_pressed() {
-            let p = Vec2::new(touch.position().x, window.height() - touch.position().y);
-            if p.x >= pos.x - size.x * 0.5 && p.x <= pos.x + size.x * 0.5 &&
-               p.y >= pos.y - size.y * 0.5 && p.y <= pos.y + size.y * 0.5 {
-                dash_touch.id = Some(touch.id());
-            }
-        }
-    }
-
-    if let Some(id) = dash_touch.id {
-        if let Some(_touch) = touches.get_pressed(id) {
-            is_pressed = true;
-        } else {
-            dash_touch.id = None;
-        }
-    }
-
-    if is_pressed && is_ready {
-        state.is_active = true;
-        state.duration_timer = settings.dash_duration;
-        state.current_energy = 0.0;
-        state.cooldown_timer = settings.cooldown_secs;
-    }
-
     if state.is_active {
-        btn_bg.0 = Color::srgba(0.0, 1.0, 1.0, 1.0);
+        btn_bg.0 = Color::srgba(0.0, 1.0, 1.0, 1.0); // Solid Cyan
     } else if is_ready {
         btn_bg.0 = Color::srgba(1.0, 1.0, 1.0, 0.9);
         meter_bg.0 = Color::srgba(0.0, 1.0, 1.0, 0.8);
     } else {
         btn_bg.0 = Color::srgba(0.2, 0.2, 0.2, 0.2);
         meter_bg.0 = Color::srgba(0.0, 0.5, 0.5, 0.3);
+    }
+
+    if *interaction == Interaction::Pressed && is_ready {
+        state.is_active = true;
+        state.duration_timer = settings.dash_duration;
+        state.current_energy = 0.0;
+        state.cooldown_timer = settings.cooldown_secs;
     }
 
     let energy_pct = state.current_energy / settings.max_energy;
