@@ -13,3 +13,4 @@ pub(super) mod reset_target;
 pub(super) mod firebase_config;
 pub(super) mod leaderboard_channel;
 pub(super) mod player_settings;
+pub(super) mod dash_touch;
